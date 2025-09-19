@@ -27,8 +27,10 @@ if ($CertificateThumbprint) {
     & "$ProjectRoot\build.ps1" -Configuration $Configuration
 }
 
-if ($LASTEXITCODE -ne 0) {
-    Write-Error "Failed to build main executable"
+# Check if build was successful by looking for the executable
+$ExePath = Join-Path $ProjectRoot "dist\installer.exe"
+if (-not (Test-Path $ExePath)) {
+    Write-Error "Failed to build main executable - installer.exe not found at $ExePath"
 }
 
 # Clean if requested
@@ -63,10 +65,10 @@ try {
         Write-Error "Executable not found at $ExePath. Build main project first."
     }
 
-    # Install WiX toolset if not present (use latest version)
-    dotnet tool install --global wix 2>$null
+    # Install WiX toolset if not present (use WiX 6)
+    dotnet tool install --global wix --version 6.0.2 2>$null
 
-    # Build MSI using WiX command line
+    # Build MSI using WiX 6 command line
     wix build sbin-installer.wxs -o "bin\$Configuration\sbin-installer-$Version.msi" -arch x64
 
     if ($LASTEXITCODE -ne 0) {

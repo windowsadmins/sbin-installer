@@ -1,21 +1,20 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
   
-  <!-- Product definition -->
-  <Product Id="*" 
-           Name="sbin-installer" 
+  <Package Name="sbin-installer" 
            Language="1033" 
-           Version="1.0.0" 
+           Version="1.0.6" 
            Manufacturer="WindowsAdmins" 
-           UpgradeCode="12345678-1234-1234-1234-123456789012">
+           UpgradeCode="12345678-1234-1234-1234-123456789012"
+           Scope="perMachine">
     
-    <Package InstallerVersion="500" Compressed="yes" InstallScope="perMachine" />
-    
-    <!-- Media and cab -->
-    <Media Id="1" Cabinet="sbin-installer.cab" EmbedCab="yes" />
+    <SummaryInformation Description="Lightweight .pkg installer for Windows" />
     
     <!-- Upgrade handling -->
     <MajorUpgrade DowngradeErrorMessage="A newer version of [ProductName] is already installed." />
+    
+    <!-- Media and cab -->
+    <MediaTemplate EmbedCab="yes" />
     
     <!-- Features -->
     <Feature Id="MainFeature" Title="sbin-installer" Description="Lightweight .pkg installer for Windows" Level="1">
@@ -24,42 +23,40 @@
     </Feature>
     
     <!-- Directory structure -->
-    <StandardDirectory Id="ProgramFiles6432Folder">
+    <StandardDirectory Id="ProgramFiles64Folder">
       <Directory Id="SbinFolder" Name="sbin">
-        <Component Id="MainExecutable" Guid="*">
+        <Component Id="MainExecutable">
           <File Id="installer.exe" 
                 Name="installer.exe" 
-                Source="..\..\dist\installer.exe" 
-                KeyPath="yes" />
+                Source="..\..\dist\installer.exe" />
+        </Component>
+        
+        <Component Id="PathEnvironment">
+          <Environment Id="PATH" 
+                       Name="PATH" 
+                       Value="[SbinFolder]" 
+                       Permanent="no" 
+                       Part="last" 
+                       Action="set" 
+                       System="yes" />
         </Component>
       </Directory>
     </StandardDirectory>
     
-    <!-- Add sbin to PATH -->
-    <Component Id="PathEnvironment" Directory="SbinFolder" Guid="*">
-      <Environment Id="PATH" 
-                   Name="PATH" 
-                   Value="[SbinFolder]" 
-                   Permanent="no" 
-                   Part="last" 
-                   Action="set" 
-                   System="yes" />
-    </Component>
-    
     <!-- UI -->
-    <UIRef Id="WixUI_Minimal" />
+    <UI>
+      <UIRef Id="WixUI_Minimal" />
+    </UI>
+    
     <WixVariable Id="WixUILicenseRtf" Value="license.rtf" />
     
     <!-- Properties -->
     <Property Id="WIXUI_INSTALLDIR" Value="SbinFolder" />
-    <Property Id="ARPPRODUCTICON" Value="installer.ico" />
     <Property Id="ARPHELPLINK" Value="https://github.com/windowsadmins/sbin-installer" />
     <Property Id="ARPURLINFOABOUT" Value="https://github.com/windowsadmins/sbin-installer" />
     <Property Id="ARPCOMMENTS" Value="A lightweight .pkg installer for Windows, inspired by macOS /usr/sbin/installer" />
     <Property Id="ARPCONTACT" Value="https://github.com/windowsadmins/sbin-installer/issues" />
     
-    <!-- Icon -->
-    <Icon Id="installer.ico" SourceFile="installer.ico" />
-    
-  </Product>
+  </Package>
 </Wix>
+
