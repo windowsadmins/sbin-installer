@@ -192,11 +192,17 @@ installer --pkg package.pkg --target /
 
 ### Development Build
 ```bash
-# Basic build
+# Basic build (includes executable + MSI)
 .\build.ps1
 
 # Clean build with tests
 .\build.ps1 -Clean -Test
+
+# Executable only (skip MSI)
+.\build.ps1 -SkipMsi
+
+# Specify version for MSI package
+.\build.ps1 -Version "1.0.8"
 
 # Architecture-specific build (auto-detected)
 .\build.ps1 -Configuration Release
@@ -211,7 +217,6 @@ installer --pkg package.pkg --target /
 # Build with signing (auto-detects best certificate)
 .\build.ps1                                            # Auto-detects and uses certificate
 .\build.ps1 -CertificateThumbprint "THUMBPRINT"       # Use specific certificate
-.\build\build-msi.ps1 -CertificateThumbprint "THUMBPRINT"  # Sign MSI
 
 # Enterprise installation
 .\build.ps1 -Install                                   # Build, auto-sign, install
@@ -235,15 +240,19 @@ installer --pkg package.pkg --target /
 # Manual .NET build
 dotnet publish src/installer/installer.csproj --configuration Release --runtime win-x64 --self-contained -o dist
 
-# MSI packaging (may require elevated permissions)
-.\build\build-msi.ps1 -Version "1.0.1" -CertificateThumbprint "THUMBPRINT"
+# Skip MSI build (executable only)
+.\build.ps1 -SkipMsi
+
+# Custom version for MSI
+.\build.ps1 -Version "1.2.0"
 
 # If WiX tool permission issues occur, try:
-# 1. Run PowerShell as Administrator
+# 1. Run PowerShell as Administrator  
 # 2. Or reinstall: dotnet tool uninstall --global wix; dotnet tool install --global wix
+# 3. Or skip MSI: .\build.ps1 -SkipMsi
 ```
 
-**Note**: WiX MSI packaging may require elevated permissions on some systems due to antivirus or security policies. The portable executable build always works without elevation.
+**Note**: MSI packaging is included by default but may require elevated permissions on some systems. Use `-SkipMsi` for environments with restricted permissions.
 
 ## Requirements
 
