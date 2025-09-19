@@ -7,10 +7,90 @@ param(
     [switch]$Test,
     [switch]$Install,
     [string]$CertificateThumbprint,
-    [string]$TimeStampServer = "http://timestamp.digicert.com"
+    [string]$TimeStampServer = "http://timestamp.digicert.com",
+    [switch]$ListCerts,
+    [string]$FindCertSubject
 )
 
 $ErrorActionPreference = "Stop"
+
+# Certificate management functions
+function Find-CodeSigningCerts {
+    param([string]$SubjectFilter = "")
+    
+    $certs = @()
+    $stores = @("Cert:\CurrentUser\My", "Cert:\LocalMachine\My")
+    
+    foreach ($store in $stores) {
+        $storeCerts = Get-ChildItem $store -ErrorAction SilentlyContinue | Where-Object {
+            $_.EnhancedKeyUsageList -like "*Code Signing*" -and 
+            $_.NotAfter -gt (Get-Date) -and
+            ($SubjectFilter -eq "" -or $_.Subject -like "*$SubjectFilter*")
+        }
+        
+        if ($storeCerts) {
+            $certs += $storeCerts | Select-Object *, @{Name='Store'; Expression={$store}}
+        }
+    }
+    
+    return $certs | Sort-Object NotAfter -Descending
+}
+
+function Show-CertificateList {
+    $certs = Find-CodeSigningCerts
+    
+    if ($certs) {
+        Write-Host "Available code signing certificates:" -ForegroundColor Green
+        for ($i = 0; $i -lt $certs.Count; $i++) {
+            $cert = $certs[$i]
+            Write-Host ""
+            Write-Host "[$($i + 1)] Subject: $($cert.Subject)" -ForegroundColor Cyan
+            Write-Host "    Issuer:  $($cert.Issuer)" -ForegroundColor Gray
+            Write-Host "    Thumbprint: $($cert.Thumbprint)" -ForegroundColor Yellow
+            Write-Host "    Valid Until: $($cert.NotAfter)" -ForegroundColor Gray
+            Write-Host "    Store: $($cert.Store)" -ForegroundColor Gray
+        }
+        Write-Host ""
+    } else {
+        Write-Host "No valid code signing certificates found" -ForegroundColor Yellow
+    }
+    
+    return $certs
+}
+
+function Get-BestCertificate {
+    $certs = Find-CodeSigningCerts
+    
+    # Prefer CurrentUser over LocalMachine, and newest expiration date
+    $best = $certs | Sort-Object @{Expression={$_.Store -eq "Cert:\CurrentUser\My"}; Descending=$true}, NotAfter -Descending | Select-Object -First 1
+    
+    return $best
+}
+
+# Handle certificate management commands
+if ($ListCerts) {
+    Show-CertificateList | Out-Null
+    return
+}
+
+if ($FindCertSubject) {
+    Write-Host "Searching for certificates with subject containing: $FindCertSubject" -ForegroundColor Green
+    $certs = Find-CodeSigningCerts -SubjectFilter $FindCertSubject
+    
+    if ($certs) {
+        for ($i = 0; $i -lt $certs.Count; $i++) {
+            $cert = $certs[$i]
+            Write-Host ""
+            Write-Host "[$($i + 1)] Subject: $($cert.Subject)" -ForegroundColor Cyan
+            Write-Host "    Thumbprint: $($cert.Thumbprint)" -ForegroundColor Yellow
+            Write-Host "    Valid Until: $($cert.NotAfter)" -ForegroundColor Gray
+            Write-Host "    Store: $($cert.Store)" -ForegroundColor Gray
+        }
+    } else {
+        Write-Host "No certificates found matching: $FindCertSubject" -ForegroundColor Yellow
+    }
+    return
+}
 
 Write-Host "Building sbin-installer..." -ForegroundColor Green
 
@@ -77,7 +157,17 @@ $ExePath = "dist/installer.exe"
 $exe = Get-Item $ExePath
 Write-Host "File size: $([math]::Round($exe.Length / 1MB, 2)) MB" -ForegroundColor Cyan
 
-# Sign the executable if certificate thumbprint provided
+# Auto-detect and use certificate if not explicitly provided
+if (-not $CertificateThumbprint) {
+    $bestCert = Get-BestCertificate
+    if ($bestCert) {
+        $CertificateThumbprint = $bestCert.Thumbprint
+        Write-Host "Auto-detected certificate: $($bestCert.Subject)" -ForegroundColor Green
+        Write-Host "Thumbprint: $CertificateThumbprint" -ForegroundColor Gray
+    }
+}
+
+# Sign the executable if certificate thumbprint provided or auto-detected
 if ($CertificateThumbprint) {
     Write-Host "Signing executable..." -ForegroundColor Yellow
     
@@ -122,8 +212,9 @@ if ($CertificateThumbprint) {
         Write-Warning "Signature verification failed or returned warnings"
     }
 } else {
-    Write-Warning "No certificate thumbprint provided. Executable will not be signed."
-    Write-Host "To sign, use: .\build.ps1 -CertificateThumbprint <thumbprint>" -ForegroundColor Yellow
+    Write-Host "No code signing certificate found. Executable will not be signed." -ForegroundColor Yellow
+    Write-Host "To sign, provide: .\build.ps1 -CertificateThumbprint <thumbprint>" -ForegroundColor Gray
+    Write-Host "Or list available certificates: .\build.ps1 -ListCerts" -ForegroundColor Gray
 }
 
 # Install if requested and running as administrator
@@ -137,15 +228,15 @@ if ($Install) {
         if (Get-Command sudo -ErrorAction SilentlyContinue) {
             Write-Host "Using sudo to elevate..." -ForegroundColor Gray
             $scriptPath = $MyInvocation.MyCommand.Path
-            $args = $MyInvocation.BoundParameters.Keys | ForEach-Object { "-$_ $($MyInvocation.BoundParameters[$_])" }
-            sudo powershell -ExecutionPolicy Bypass -File $scriptPath $args
+            $scriptArgs = $MyInvocation.BoundParameters.Keys | ForEach-Object { "-$_ $($MyInvocation.BoundParameters[$_])" }
+            sudo powershell -ExecutionPolicy Bypass -File $scriptPath $scriptArgs
             return
         } else {
             # Fallback to PowerShell elevation
             Write-Host "Sudo not available, using PowerShell elevation..." -ForegroundColor Gray
             $scriptPath = $MyInvocation.MyCommand.Path
-            $args = $MyInvocation.BoundParameters.Keys | ForEach-Object { "-$_ $($MyInvocation.BoundParameters[$_])" }
-            Start-Process powershell -ArgumentList "-ExecutionPolicy", "Bypass", "-File", $scriptPath, $args -Verb RunAs -Wait
+            $scriptArgs = $MyInvocation.BoundParameters.Keys | ForEach-Object { "-$_ $($MyInvocation.BoundParameters[$_])" }
+            Start-Process powershell -ArgumentList "-ExecutionPolicy", "Bypass", "-File", $scriptPath, $scriptArgs -Verb RunAs -Wait
             return
         }
     }

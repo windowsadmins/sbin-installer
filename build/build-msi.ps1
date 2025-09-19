@@ -19,10 +19,12 @@ $MsiProject = Join-Path $BuildRoot "msi\sbin-installer-msi.wixproj"
 
 # Ensure main executable is built first
 Write-Host "Building main executable..." -ForegroundColor Yellow
-& "$ProjectRoot\build.ps1" -Configuration $Configuration
 
+# Use integrated certificate detection from main build script
 if ($CertificateThumbprint) {
     & "$ProjectRoot\build.ps1" -Configuration $Configuration -CertificateThumbprint $CertificateThumbprint
+} else {
+    & "$ProjectRoot\build.ps1" -Configuration $Configuration
 }
 
 if ($LASTEXITCODE -ne 0) {
