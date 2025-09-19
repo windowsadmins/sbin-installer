@@ -11,10 +11,16 @@ param(
     [switch]$ListCerts,
     [string]$FindCertSubject,
     [switch]$SkipMsi,
-    [string]$Version = "1.0.0"
+    [string]$Version = ""
 )
 
 $ErrorActionPreference = "Stop"
+
+# Generate timestamp version if not provided
+if ([string]::IsNullOrEmpty($Version)) {
+    $now = Get-Date
+    $Version = "$($now.Year).$($now.Month.ToString('D2')).$($now.Day.ToString('D2')).$($now.Hour.ToString('D2'))$($now.Minute.ToString('D2'))"
+}
 
 # Certificate management functions
 function Find-CodeSigningCerts {
@@ -95,6 +101,7 @@ if ($FindCertSubject) {
 }
 
 Write-Host "Building sbin-installer..." -ForegroundColor Green
+Write-Host "Version: $Version" -ForegroundColor Cyan
 
 # Determine architecture-correct Program Files directory
 $ProgramFilesDir = if ($env:PROCESSOR_ARCHITECTURE -eq "AMD64" -or $env:PROCESSOR_ARCHITEW6432 -eq "AMD64") {
@@ -151,7 +158,9 @@ dotnet publish src/installer/installer.csproj `
     -p:PublishSingleFile=true `
     -p:EnableCompressionInSingleFile=true `
     -p:DebugType=embedded `
-    -p:PublishTrimmed=true
+    -p:PublishTrimmed=true `
+    -p:AssemblyVersion=$Version `
+    -p:FileVersion=$Version
 
 $ExePath = "dist/installer.exe"
 
@@ -232,18 +241,18 @@ if (-not $SkipMsi) {
     $BuildRoot = $PSScriptRoot
     $MsiPath = Join-Path $BuildRoot "build\msi"
     
-    # Update version in WiX file if specified
-    if ($Version -ne "1.0.0") {
-        Write-Host "Updating MSI version to $Version..." -ForegroundColor Yellow
-        $WxsPath = Join-Path $MsiPath "sbin-installer.wxs"
-        if (Test-Path $WxsPath) {
-            $wxsContent = Get-Content $WxsPath -Raw
-            # Fix any broken XML version declaration
-            $wxsContent = $wxsContent -replace '<\?xml Version="[^"]*"', '<?xml version="1.0"'
-            # Update the Package Version attribute
-            $wxsContent = $wxsContent -replace 'Version="[\d\.]+?"', "Version=`"$Version`""
-            Set-Content $WxsPath $wxsContent
-        }
+    # Update version in WiX file
+    Write-Host "Updating MSI version to $Version..." -ForegroundColor Yellow
+    $WxsPath = Join-Path $MsiPath "sbin-installer.wxs"
+    if (Test-Path $WxsPath) {
+        $wxsContent = Get-Content $WxsPath -Raw
+        # Fix any broken XML version declaration
+        $wxsContent = $wxsContent -replace '<\?xml Version="[^"]*"', '<?xml version="1.0"'
+        # Update the Package Version attribute (convert timestamp to 4-part version for MSI compatibility)
+        $versionParts = $Version.Split('.')
+        $msiVersion = "$($versionParts[0]).$($versionParts[1]).$($versionParts[2]).$([int]$versionParts[3])"
+        $wxsContent = $wxsContent -replace 'Version="[\d\.]+?"', "Version=`"$msiVersion`""
+        Set-Content $WxsPath $wxsContent
     }
     
     # Build MSI

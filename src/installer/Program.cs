@@ -140,7 +140,8 @@ class Program
         if (options.ShowVersion)
         {
             var version = Assembly.GetExecutingAssembly().GetName().Version;
-            Console.WriteLine($"installer version {version}");
+            var buildDate = GetBuildTimestamp();
+            Console.WriteLine($"installer version {buildDate}");
             return;
         }
 
@@ -227,6 +228,22 @@ class Program
     private static string SerializeConfigForDisplay(InstallOptions options)
     {
         return JsonSerializer.Serialize(options, new JsonSerializerOptions { WriteIndented = true });
+    }
+
+    private static string GetBuildTimestamp()
+    {
+        var version = Assembly.GetExecutingAssembly().GetName().Version;
+        if (version != null && version.Major > 2000)
+        {
+            // If version is in timestamp format (YYYY.MM.DD.HHMM), use it directly
+            return $"{version.Major}.{version.Minor:D2}.{version.Build:D2}.{version.Revision:D4}";
+        }
+        else
+        {
+            // Fallback to current timestamp format
+            var now = DateTime.Now;
+            return $"{now.Year}.{now.Month:D2}.{now.Day:D2}.{now.Hour:D2}{now.Minute:D2}";
+        }
     }
 
     static void ShowDomainInfo(bool plistFormat)

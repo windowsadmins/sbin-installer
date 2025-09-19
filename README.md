@@ -192,7 +192,7 @@ installer --pkg package.pkg --target /
 
 ### Development Build
 ```bash
-# Basic build (includes executable + MSI)
+# Basic build (includes executable + MSI with timestamp version)
 .\build.ps1
 
 # Clean build with tests
@@ -201,8 +201,8 @@ installer --pkg package.pkg --target /
 # Executable only (skip MSI)
 .\build.ps1 -SkipMsi
 
-# Specify version for MSI package
-.\build.ps1 -Version "1.0.8"
+# Custom version (default is timestamp: YYYY.MM.DD.HHMM)
+.\build.ps1 -Version "2025.09.18.1200"
 
 # Architecture-specific build (auto-detected)
 .\build.ps1 -Configuration Release
@@ -243,8 +243,8 @@ dotnet publish src/installer/installer.csproj --configuration Release --runtime 
 # Skip MSI build (executable only)
 .\build.ps1 -SkipMsi
 
-# Custom version for MSI
-.\build.ps1 -Version "1.2.0"
+# Custom timestamp version (format: YYYY.MM.DD.HHMM)
+.\build.ps1 -Version "2025.12.25.1430"
 
 # If WiX tool permission issues occur, try:
 # 1. Run PowerShell as Administrator  
@@ -252,7 +252,7 @@ dotnet publish src/installer/installer.csproj --configuration Release --runtime 
 # 3. Or skip MSI: .\build.ps1 -SkipMsi
 ```
 
-**Note**: MSI packaging is included by default but may require elevated permissions on some systems. Use `-SkipMsi` for environments with restricted permissions.
+**Note**: MSI packaging is included by default but may require elevated permissions on some systems. Use `-SkipMsi` for environments with restricted permissions. Version format follows `YYYY.MM.DD.HHMM` timestamp convention.
 
 ## Requirements
 
