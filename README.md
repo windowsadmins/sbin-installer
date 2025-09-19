@@ -1,12 +1,12 @@
 # sbin-installer
 
-A lightweight, deterministic `.pkg` installer for Windows, inspired by the elegant simplicity of macOS package installation, brought to Windows.
-This tool provides a simple, Chocolatey-free alternative for installing packages with a clean command-line interface.
+A lightweight, deterministic `.pkg` installer for Windows, inspired by the elegant simplicity of macOS package installation `/usr/sbin/installer` - this tool provides a simple, Chocolatey-free alternative for installing packages with a clean command-line interface.
+
 This tool follows the Unix philosophy: **Do one thing and do it well.** 
 
 ## Why This Exists
 
-**Chocolatey is overkill.** It's overcomplicated and does way more than we need and its package manager like `brew` on the Mac. 
+Chocolatey is a powerful tool, but it's often excessive for simple package installation tasks. Its package management model is more akin to `brew` on macOS—feature-rich, but with added complexity, state management, and overhead that aren't necessary when you just want to install a package quickly and cleanly.
 
 All we want to run is `installer.exe --pkg /path/to/pkg --target /` on Windows.
 
@@ -205,15 +205,16 @@ installer --pkg package.pkg --target /
 ### Code Signing & Enterprise
 ```bash
 # Certificate management
-.\cert-helper.ps1 -List                               # List certificates
-.\cert-helper.ps1 -Find -Subject "Your Company"      # Find by subject
+.\build.ps1 -ListCerts                                 # List available certificates
+.\build.ps1 -FindCertSubject "Your Company"           # Find by subject
 
-# Build with signing
-.\build.ps1 -CertificateThumbprint "THUMBPRINT"       # Sign executable
+# Build with signing (auto-detects best certificate)
+.\build.ps1                                            # Auto-detects and uses certificate
+.\build.ps1 -CertificateThumbprint "THUMBPRINT"       # Use specific certificate
 .\build\build-msi.ps1 -CertificateThumbprint "THUMBPRINT"  # Sign MSI
 
 # Enterprise installation
-.\build.ps1 -CertificateThumbprint "THUMBPRINT" -Install   # Build, sign, install
+.\build.ps1 -Install                                   # Build, auto-sign, install
 ```
 
 ### System Installation
@@ -223,6 +224,7 @@ installer --pkg package.pkg --target /
 ```
 
 **Features:**
+- Auto-detects and uses code signing certificates when available
 - Auto-detects architecture (x64, ARM64, x86) and uses appropriate Program Files
 - Uses `%ProgramW6432%` for x64/ARM64 systems  
 - Adds `C:\Program Files\sbin` to system PATH
