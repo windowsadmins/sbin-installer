@@ -1,9 +1,13 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
   
+  <?ifndef Version?>
+    <?define Version = "1.0.0.0"?>
+  <?endif?>
+  
   <Package Name="sbin-installer" 
            Language="1033" 
-           Version="1.0.0" 
+           Version="$(Version)" 
            Manufacturer="WindowsAdmins" 
            UpgradeCode="12345678-1234-1234-1234-123456789012"
            Scope="perMachine">
@@ -59,5 +63,6 @@
     
   </Package>
 </Wix>
+
 
 

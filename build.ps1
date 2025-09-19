@@ -160,7 +160,10 @@ dotnet publish src/installer/installer.csproj `
     -p:DebugType=embedded `
     -p:PublishTrimmed=true `
     -p:AssemblyVersion=$Version `
-    -p:FileVersion=$Version
+    -p:FileVersion=$Version `
+    -p:InformationalVersion=$Version `
+    -p:IncludeSourceRevisionInInformationalVersion=false `
+    -p:UseSourceLink=false
 
 $ExePath = "dist/installer.exe"
 
@@ -241,19 +244,20 @@ if (-not $SkipMsi) {
     $BuildRoot = $PSScriptRoot
     $MsiPath = Join-Path $BuildRoot "build\msi"
     
-    # Update version in WiX file
-    Write-Host "Updating MSI version to $Version..." -ForegroundColor Yellow
-    $WxsPath = Join-Path $MsiPath "sbin-installer.wxs"
-    if (Test-Path $WxsPath) {
-        $wxsContent = Get-Content $WxsPath -Raw
-        # Fix any broken XML version declaration
-        $wxsContent = $wxsContent -replace '<\?xml Version="[^"]*"', '<?xml version="1.0"'
-        # Update the Package Version attribute (convert timestamp to 4-part version for MSI compatibility)
-        $versionParts = $Version.Split('.')
-        $msiVersion = "$($versionParts[0]).$($versionParts[1]).$($versionParts[2]).$([int]$versionParts[3])"
-        $wxsContent = $wxsContent -replace 'Version="[\d\.]+?"', "Version=`"$msiVersion`""
-        Set-Content $WxsPath $wxsContent
+    # Convert timestamp to MSI-compatible version format
+    $versionParts = $Version.Split('.')
+    if ($versionParts.Length -eq 4) {
+        # For timestamp format YYYY.MM.DD.HHMM, convert to MSI-compatible format
+        $year = [int]$versionParts[0] - 2000  # Convert 2025 to 25 to fit in MSI limits
+        $month = [int]$versionParts[1]
+        $day = [int]$versionParts[2] 
+        $time = [int]$versionParts[3]
+        $msiVersion = "$year.$month.$day.$time"
+    } else {
+        $msiVersion = $Version
     }
+    
+    Write-Host "MSI version: $msiVersion" -ForegroundColor Gray
     
     # Build MSI
     $CurrentLocation = Get-Location
@@ -266,10 +270,20 @@ if (-not $SkipMsi) {
         
         # Build MSI using WiX 6
         Write-Host "Compiling MSI package..." -ForegroundColor Yellow
-        wix build sbin-installer.wxs -o "bin\$Configuration\sbin-installer-$Version.msi" -arch x64
+        try {
+            & wix build sbin-installer.wxs -o "bin\$Configuration\sbin-installer-$Version.msi" -arch x64 -d Version="$msiVersion"
+        } catch {
+            $wixError = $_.Exception.Message
+        }
         
         if ($LASTEXITCODE -ne 0) {
             Write-Warning "MSI build failed with exit code $LASTEXITCODE"
+            if ($wixError -and $wixError -match "Access is denied") {
+                Write-Host "⚠ WiX permission issue detected. Try running as Administrator or install WiX locally." -ForegroundColor Yellow
+                Write-Host "To build MSI manually:" -ForegroundColor Gray
+                Write-Host "  cd build\msi" -ForegroundColor Gray
+                Write-Host "  wix build sbin-installer.wxs -o `"bin\$Configuration\sbin-installer-$Version.msi`" -arch x64 -d Version=`"$msiVersion`"" -ForegroundColor Gray
+            }
         } else {
             # Find the generated MSI
             $GeneratedMsi = Get-ChildItem "bin\$Configuration\*.msi" | Select-Object -First 1
