@@ -109,8 +109,8 @@ try {
         } else {
             Write-Host "Using SignTool: $SignTool" -ForegroundColor Gray
             
-            # Sign MSI
-            & $SignTool sign /sha1 $CertificateThumbprint /fd SHA256 /tr $TimeStampServer /td SHA256 $MsiPath.FullName
+            # Sign MSI (suppress verbose output)
+            $null = & $SignTool sign /sha1 $CertificateThumbprint /fd SHA256 /tr $TimeStampServer /td SHA256 $MsiPath.FullName 2>&1
             
             if ($LASTEXITCODE -eq 0) {
                 Write-Host "Successfully signed MSI: $($MsiPath.FullName)" -ForegroundColor Green
