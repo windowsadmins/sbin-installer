@@ -1,6 +1,6 @@
 # sbin-installer
 
-A lightweight, deterministic `.pkg` installer for Windows, inspired by `/usr/sbin/installer` - the elegant simplicity of macOS package installation, brought to Windows.
+A lightweight, deterministic `.pkg` installer for Windows, inspired by the elegant simplicity of macOS package installation, brought to Windows.
 This tool provides a simple, Chocolatey-free alternative for installing packages with a clean command-line interface.
 This tool follows the Unix philosophy: **Do one thing and do it well.** 
 
@@ -165,17 +165,30 @@ dependencies: []
 | Performance | Slow | Fast |
 | Complexity | High | Minimal |
 
-## Building and Installation
+## Installation
 
-### Quick Installation
+### Quick Start
 
-**MSI Installer**
+**MSI Installer (Recommended)**
 ```bash
-# Download from releases page
-# https://github.com/windowsadmins/sbin-installer/releases
-# Run the .msi file - it will install to C:\Program Files\sbin\ and add to PATH
-# Make sure to sign with your enterprise certificate if your enviroment demands it.
+# Download from GitHub releases and run:
+msiexec /i sbin-installer.msi /quiet
+# Installs to C:\Program Files\sbin\ and adds to PATH
 ```
+
+**Portable Executable**
+```bash
+# Download installer.exe, place anywhere, no installation required
+installer --pkg package.pkg --target /
+```
+
+### Enterprise Deployment
+
+- **GitHub Actions CI/CD**: Automated builds for x64/ARM64/x86 architectures
+- **Code Signing**: Certificate-based signing with timestamp validation
+- **Silent Installation**: `msiexec /i sbin-installer.msi /quiet`
+- **Elevation Handling**: Auto-detects `sudo` (Win11 22H2+) or PowerShell UAC
+- **Path Management**: Uses `%ProgramW6432%` for proper architecture detection
 
 ### Development Build
 ```bash
@@ -189,68 +202,40 @@ dependencies: []
 .\build.ps1 -Configuration Release
 ```
 
-### Code Signing
-For production deployment, the executable must be signed:
-
+### Code Signing & Enterprise
 ```bash
-# List available code signing certificates
-.\cert-helper.ps1 -List
+# Certificate management
+.\cert-helper.ps1 -List                               # List certificates
+.\cert-helper.ps1 -Find -Subject "Your Company"      # Find by subject
 
-# Find certificate by subject
-.\cert-helper.ps1 -Find -Subject "Your Company"
+# Build with signing
+.\build.ps1 -CertificateThumbprint "THUMBPRINT"       # Sign executable
+.\build\build-msi.ps1 -CertificateThumbprint "THUMBPRINT"  # Sign MSI
 
-# Sign with certificate from certificate store
-.\build.ps1 -CertificateThumbprint "YOUR_CERT_THUMBPRINT"
-
-# Sign and install system-wide (requires admin)
-.\build.ps1 -CertificateThumbprint "YOUR_CERT_THUMBPRINT" -Install
+# Enterprise installation
+.\build.ps1 -CertificateThumbprint "THUMBPRINT" -Install   # Build, sign, install
 ```
 
 ### System Installation
-Install to `C:\Program Files\sbin\installer.exe` (or architecture-appropriate Program Files):
-
 ```bash
-# Install to system (requires Administrator privileges)
-.\build.ps1 -Install
-
-# Or use dedicated installation script
-.\install.ps1
-
-# Build, sign, and install in one step
-.\build.ps1 -CertificateThumbprint "YOUR_THUMBPRINT" -Install
-
-# Force overwrite existing installation
-.\install.ps1 -Force
+.\build.ps1 -Install                    # Install to C:\Program Files\sbin\
+.\install.ps1 -Force                    # Force overwrite existing
 ```
 
-The installer automatically:
-- Detects architecture (x64, ARM64, x86) and uses appropriate Program Files directory
-- Uses `%ProgramW6432%` for x64 and ARM64 systems
+**Features:**
+- Auto-detects architecture (x64, ARM64, x86) and uses appropriate Program Files
+- Uses `%ProgramW6432%` for x64/ARM64 systems  
 - Adds `C:\Program Files\sbin` to system PATH
-- Enables running `installer` command from any location
+- Enables `installer` command globally
 
-### Manual Installation
+### Advanced Build Options
 ```bash
+# Manual .NET build
 dotnet publish src/installer/installer.csproj --configuration Release --runtime win-x64 --self-contained -o dist
+
+# MSI packaging
+.\build\build-msi.ps1 -Version "1.0.1" -CertificateThumbprint "THUMBPRINT"
 ```
-
-### MSI Package Build
-```bash
-# Build MSI installer package
-.\build\build-msi.ps1
-
-# Build with version and signing
-.\build\build-msi.ps1 -Version "1.0.1" -CertificateThumbprint "YOUR_THUMBPRINT"
-
-# Clean build
-.\build\build-msi.ps1 -Clean -Configuration Release
-```
-
-The MSI installer:
-- Installs to `C:\Program Files\sbin\installer.exe`
-- Automatically adds to system PATH
-- Includes Windows uninstaller integration
-- Supports silent installation: `msiexec /i sbin-installer.msi /quiet`
 
 ## Requirements
 
