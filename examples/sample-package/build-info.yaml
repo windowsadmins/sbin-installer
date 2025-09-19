@@ -1,0 +1,9 @@
+name: "example-package"
+version: "1.0.0"
+description: "Example package for testing sbin-installer"
+author: "Test Author"
+license: "MIT"
+homepage: "https://example.com"
+target: "/"
+restart_action: "None"
+dependencies: []

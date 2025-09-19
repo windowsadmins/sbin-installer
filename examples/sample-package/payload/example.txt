@@ -1,0 +1,4 @@
+This is a sample file that will be installed to the target directory.
+
+Created by sbin-installer example package.
+Date: 2025-09-18

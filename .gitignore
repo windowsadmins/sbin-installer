@@ -1,0 +1,34 @@
+# Build outputs
+bin/
+obj/
+dist/
+*.exe
+
+# Visual Studio
+.vs/
+*.user
+*.suo
+
+# Temporary files
+*.tmp
+*.temp
+/temp/
+
+# Log files
+*.log
+
+# Test packages
+*.pkg
+test-packages/
+
+# Certificate files
+*.pfx
+*.p12
+*.cer
+
+# Windows specific
+Thumbs.db
+Desktop.ini
+
+# Development
+*.local
