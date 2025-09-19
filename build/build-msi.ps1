@@ -14,12 +14,16 @@ $ErrorActionPreference = "Stop"
 Write-Host "Building sbin-installer MSI..." -ForegroundColor Green
 
 $BuildRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
-$ProjectRoot = Split-Path -Parent (Split-Path -Parent $BuildRoot)
+$ProjectRoot = Split-Path -Parent $BuildRoot
 $MsiProject = Join-Path $BuildRoot "msi\sbin-installer-msi.wixproj"
 
 # Ensure main executable is built first
 Write-Host "Building main executable..." -ForegroundColor Yellow
-& "$ProjectRoot\build.ps1" -Configuration $Configuration -CertificateThumbprint $CertificateThumbprint
+& "$ProjectRoot\build.ps1" -Configuration $Configuration
+
+if ($CertificateThumbprint) {
+    & "$ProjectRoot\build.ps1" -Configuration $Configuration -CertificateThumbprint $CertificateThumbprint
+}
 
 if ($LASTEXITCODE -ne 0) {
     Write-Error "Failed to build main executable"
@@ -57,11 +61,11 @@ try {
         Write-Error "Executable not found at $ExePath. Build main project first."
     }
 
-    # Install WiX toolset if not present
-    dotnet tool install --global wix --version 5.0.0 2>$null
+    # Install WiX toolset if not present (use latest version)
+    dotnet tool install --global wix 2>$null
 
-    # Build MSI
-    dotnet build $MsiProject --configuration $Configuration
+    # Build MSI using WiX command line
+    wix build sbin-installer.wxs -o "bin\$Configuration\sbin-installer-$Version.msi" -arch x64
 
     if ($LASTEXITCODE -ne 0) {
         Write-Error "MSI build failed"

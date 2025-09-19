@@ -1,19 +1,28 @@
-<Project Sdk="WixToolset.Sdk/5.0.0">
+<Project Sdk="Microsoft.NET.Sdk">
   
   <PropertyGroup>
     <TargetFramework>net6.0</TargetFramework>
     <OutputType>Library</OutputType>
     <OutputName>sbin-installer</OutputName>
     <PlatformTarget>x64</PlatformTarget>
+    <GenerateAssemblyInfo>false</GenerateAssemblyInfo>
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="WixToolset.UI.wixext" Version="5.0.0" />
+    <PackageReference Include="WixToolset.Msi" Version="4.0.4" />
+    <PackageReference Include="WixToolset.UI.wixext" Version="4.0.4" />
+    <PackageReference Include="WixToolset.Util.wixext" Version="4.0.4" />
   </ItemGroup>
 
   <ItemGroup>
+    <Compile Remove="**\*" />
+    <None Include="sbin-installer.wxs" />
     <Content Include="license.rtf" />
     <Content Include="installer.ico" />
   </ItemGroup>
+
+  <Target Name="Build">
+    <Error Text="Use WiX command line tools to build MSI. Run: wix build sbin-installer.wxs" />
+  </Target>
 
 </Project>

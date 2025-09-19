@@ -167,6 +167,21 @@ dependencies: []
 
 ## Building and Installation
 
+### Quick Installation
+
+**MSI Installer (Recommended for most users):**
+```bash
+# Download from releases page
+# https://github.com/windowsadmins/sbin-installer/releases
+# Run the .msi file - it will install to C:\Program Files\sbin\ and add to PATH
+```
+
+**Portable Executable:**
+```bash
+# Download installer.exe from releases page
+# Place in your PATH or run directly - no installation required
+```
+
 ### Development Build
 ```bash
 # Basic build
@@ -223,6 +238,24 @@ The installer automatically:
 ```bash
 dotnet publish src/installer/installer.csproj --configuration Release --runtime win-x64 --self-contained -o dist
 ```
+
+### MSI Package Build
+```bash
+# Build MSI installer package
+.\build\build-msi.ps1
+
+# Build with version and signing
+.\build\build-msi.ps1 -Version "1.0.1" -CertificateThumbprint "YOUR_THUMBPRINT"
+
+# Clean build
+.\build\build-msi.ps1 -Clean -Configuration Release
+```
+
+The MSI installer:
+- Installs to `C:\Program Files\sbin\installer.exe`
+- Automatically adds to system PATH
+- Includes Windows uninstaller integration
+- Supports silent installation: `msiexec /i sbin-installer.msi /quiet`
 
 ## Requirements
 

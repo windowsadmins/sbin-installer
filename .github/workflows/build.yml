@@ -24,7 +24,7 @@ jobs:
         dotnet-version: ${{ env.DOTNET_VERSION }}
         
     - name: Install WiX Toolset
-      run: dotnet tool install --global wix --version 5.0.0
+      run: dotnet tool install --global wix
       
     - name: Restore dependencies
       run: dotnet restore
@@ -109,7 +109,7 @@ jobs:
         dotnet-version: ${{ env.DOTNET_VERSION }}
         
     - name: Install WiX Toolset
-      run: dotnet tool install --global wix --version 5.0.0
+      run: dotnet tool install --global wix
       
     - name: Import code signing certificate
       if: env.CERTIFICATE_BASE64 != ''
