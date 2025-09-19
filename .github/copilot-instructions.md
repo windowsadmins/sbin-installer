@@ -1,7 +1,5 @@
+`````instructions
 # sbin-installer AI Coding Agent Instructions
-
-## Project Overview
-
 This is a **lightweight Windows package installer** that mimics macOS `/usr/sbin/installer` behavior. It's designed as a **simple, focused alternative to Chocolatey** for installing `.pkg` files (ZIP archives with metadata).
 
 ### Core Philosophy
@@ -147,3 +145,4 @@ ZipFile.ExtractToDirectory(packagePath, tempDir);
 - **Cleanup is critical** - temp directories can accumulate
 
 This tool succeeds by staying focused and simple. When in doubt, ask: "Would macOS installer do this?"
+`````
