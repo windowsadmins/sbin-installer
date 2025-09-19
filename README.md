@@ -161,7 +161,7 @@ dependencies: []
 | Source repositories | Required | Direct file path |
 | Package format | `.nupkg` | `.pkg` (same ZIP, better name) |
 | Dependency resolution | Full tree | Simple list |
-| Script support | chocolatey*.ps1 | + scripts/*.ps1 |
+| Script support | tools\chocolatey*.ps1 | + scripts/*.ps1 |
 | Performance | Slow | Fast |
 | Complexity | High | Minimal |
 
@@ -169,17 +169,12 @@ dependencies: []
 
 ### Quick Installation
 
-**MSI Installer (Recommended for most users):**
+**MSI Installer**
 ```bash
 # Download from releases page
 # https://github.com/windowsadmins/sbin-installer/releases
 # Run the .msi file - it will install to C:\Program Files\sbin\ and add to PATH
-```
-
-**Portable Executable:**
-```bash
-# Download installer.exe from releases page
-# Place in your PATH or run directly - no installation required
+# Make sure to sign with your enterprise certificate if your enviroment demands it.
 ```
 
 ### Development Build
