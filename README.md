@@ -1,12 +1,14 @@
 # sbin-installer
 
-A lightweight, deterministic `.pkg` installer for Windows, inspired by macOS `/usr/sbin/installer`. This tool provides a simple, Chocolatey-free alternative for installing packages with a clean command-line interface.
+A lightweight, deterministic `.pkg` installer for Windows, inspired by `/usr/sbin/installer` - the elegant simplicity of macOS package installation, brought to Windows.
+This tool provides a simple, Chocolatey-free alternative for installing packages with a clean command-line interface.
+This tool follows the Unix philosophy: **Do one thing and do it well.** 
 
 ## Why This Exists
 
-**`Chocolatey is overkill`.** It's overcomplicated and does way more than we need and its package manager like `brew` on the Mac. 
+**Chocolatey is overkill.** It's overcomplicated and does way more than we need and its package manager like `brew` on the Mac. 
 
-All we want is something as simple and elegant as macOS's `/usr/sbin/installer --pkg /path/to/pkg --target /` for Windows.
+All we want to run is `installer.exe --pkg /path/to/pkg --target /` on Windows.
 
 ### The Problem with Chocolatey
 
@@ -16,15 +18,7 @@ All we want is something as simple and elegant as macOS's `/usr/sbin/installer -
 - Heavy dependencies and slow performance
 - Uses `.nupkg` extension (we prefer `.pkg`)
 
-## Design Philosophy
-
-This tool follows the Unix philosophy: **Do one thing and do it well.** 
-
-We're not trying to replace package managers like Chocolatey entirely. We're providing a focused tool for organizations that need simple, reliable package installation without the overhead.
-
-**Inspired by `/usr/sbin/installer`** - the elegant simplicity of macOS package installation, brought to Windows.
-
-### Our Solution
+### This Solution
 
 A minimal, focused installer that:
 - **No cache** - runs directly from package location
@@ -49,7 +43,7 @@ package.pkg (ZIP file)
 
 ### Installation Process
 
-1. **Extract** the `.pkg` (ZIP) to a temporary directory
+1. **Extract** the `.pkg` (really a zip) to a temporary directory
 2. **Run pre-install script** (`scripts/preinstall.ps1` or `tools/chocolateyBeforeInstall.ps1`)
 3. **Mirror payload** from `payload/` directory to target location
 4. **Run post-install script** (`scripts/postinstall.ps1` or `tools/chocolateyInstall.ps1`)
