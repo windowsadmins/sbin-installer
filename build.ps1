@@ -9,7 +9,9 @@ param(
     [string]$CertificateThumbprint,
     [string]$TimeStampServer = "http://timestamp.digicert.com",
     [switch]$ListCerts,
-    [string]$FindCertSubject
+    [string]$FindCertSubject,
+    [switch]$SkipMsi,
+    [string]$Version = "1.0.0"
 )
 
 $ErrorActionPreference = "Stop"
@@ -222,6 +224,103 @@ if ($CertificateThumbprint) {
     Write-Host "Or list available certificates: .\build.ps1 -ListCerts" -ForegroundColor Gray
 }
 
+# Build MSI package (unless skipped)
+if (-not $SkipMsi) {
+    Write-Host ""
+    Write-Host "Building MSI package..." -ForegroundColor Green
+    
+    $BuildRoot = $PSScriptRoot
+    $MsiPath = Join-Path $BuildRoot "build\msi"
+    
+    # Update version in WiX file if specified
+    if ($Version -ne "1.0.0") {
+        Write-Host "Updating MSI version to $Version..." -ForegroundColor Yellow
+        $WxsPath = Join-Path $MsiPath "sbin-installer.wxs"
+        if (Test-Path $WxsPath) {
+            $wxsContent = Get-Content $WxsPath -Raw
+            # Fix any broken XML version declaration
+            $wxsContent = $wxsContent -replace '<\?xml Version="[^"]*"', '<?xml version="1.0"'
+            # Update the Package Version attribute
+            $wxsContent = $wxsContent -replace 'Version="[\d\.]+?"', "Version=`"$Version`""
+            Set-Content $WxsPath $wxsContent
+        }
+    }
+    
+    # Build MSI
+    $CurrentLocation = Get-Location
+    try {
+        Set-Location $MsiPath
+        
+        # Install WiX toolset if not present
+        Write-Host "Ensuring WiX toolset is available..." -ForegroundColor Yellow
+        dotnet tool install --global wix --version 6.0.2 2>$null | Out-Null
+        
+        # Build MSI using WiX 6
+        Write-Host "Compiling MSI package..." -ForegroundColor Yellow
+        wix build sbin-installer.wxs -o "bin\$Configuration\sbin-installer-$Version.msi" -arch x64
+        
+        if ($LASTEXITCODE -ne 0) {
+            Write-Warning "MSI build failed with exit code $LASTEXITCODE"
+        } else {
+            # Find the generated MSI
+            $GeneratedMsi = Get-ChildItem "bin\$Configuration\*.msi" | Select-Object -First 1
+            
+            if ($GeneratedMsi) {
+                Write-Host "MSI built successfully: $($GeneratedMsi.FullName)" -ForegroundColor Green
+                
+                # Sign MSI if certificate is available
+                if ($CertificateThumbprint) {
+                    Write-Host "Signing MSI..." -ForegroundColor Yellow
+                    
+                    # Find signtool.exe (reuse from executable signing)
+                    $SignTool = $null
+                    $PossiblePaths = @(
+                        "${env:ProgramFiles(x86)}\Windows Kits\10\bin\*\x64\signtool.exe",
+                        "${env:ProgramFiles}\Windows Kits\10\bin\*\x64\signtool.exe",
+                        "${env:ProgramFiles(x86)}\Microsoft SDKs\Windows\*\bin\signtool.exe"
+                    )
+                    
+                    foreach ($Path in $PossiblePaths) {
+                        $Found = Get-ChildItem $Path -ErrorAction SilentlyContinue | Sort-Object Name -Descending | Select-Object -First 1
+                        if ($Found) {
+                            $SignTool = $Found.FullName
+                            break
+                        }
+                    }
+                    
+                    if ($SignTool) {
+                        # Sign MSI (suppress verbose output)
+                        $null = & $SignTool sign /sha1 $CertificateThumbprint /fd SHA256 /tr $TimeStampServer /td SHA256 $GeneratedMsi.FullName 2>&1
+                        
+                        if ($LASTEXITCODE -eq 0) {
+                            Write-Host "Successfully signed MSI" -ForegroundColor Green
+                        } else {
+                            Write-Warning "MSI signing failed"
+                        }
+                    }
+                }
+                
+                # Copy MSI to dist folder
+                $FinalMsiPath = Join-Path $PSScriptRoot "dist\sbin-installer-$Version.msi"
+                Copy-Item $GeneratedMsi.FullName $FinalMsiPath -Force
+                
+                # Show MSI info
+                $MsiFile = Get-Item $FinalMsiPath
+                Write-Host "Final MSI: $FinalMsiPath" -ForegroundColor Cyan
+                Write-Host "MSI size: $([math]::Round($MsiFile.Length / 1MB, 2)) MB" -ForegroundColor Cyan
+            } else {
+                Write-Warning "MSI file not found after build"
+            }
+        }
+    } catch {
+        Write-Warning "MSI build failed: $($_.Exception.Message)"
+    } finally {
+        Set-Location $CurrentLocation
+    }
+} else {
+    Write-Host "Skipping MSI build (use -SkipMsi flag)" -ForegroundColor Yellow
+}
+
 # Install if requested and running as administrator
 if ($Install) {
     $IsAdmin = ([Security.Principal.WindowsPrincipal] [Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
@@ -279,6 +378,14 @@ if ($Install) {
         Write-Error "Installation test failed"
     }
 } else {
-    Write-Host "Build complete! Executable: $ExePath" -ForegroundColor Green
+    Write-Host ""
+    Write-Host "Build complete!" -ForegroundColor Green
+    Write-Host "Executable: $ExePath" -ForegroundColor Cyan
+    if (-not $SkipMsi) {
+        $MsiPath = "dist\sbin-installer-$Version.msi"
+        if (Test-Path $MsiPath) {
+            Write-Host "MSI Package: $MsiPath" -ForegroundColor Cyan
+        }
+    }
     Write-Host "To install system-wide, use: .\build.ps1 -Install (requires admin)" -ForegroundColor Yellow
 }
