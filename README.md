@@ -235,9 +235,15 @@ installer --pkg package.pkg --target /
 # Manual .NET build
 dotnet publish src/installer/installer.csproj --configuration Release --runtime win-x64 --self-contained -o dist
 
-# MSI packaging
+# MSI packaging (may require elevated permissions)
 .\build\build-msi.ps1 -Version "1.0.1" -CertificateThumbprint "THUMBPRINT"
+
+# If WiX tool permission issues occur, try:
+# 1. Run PowerShell as Administrator
+# 2. Or reinstall: dotnet tool uninstall --global wix; dotnet tool install --global wix
 ```
+
+**Note**: WiX MSI packaging may require elevated permissions on some systems due to antivirus or security policies. The portable executable build always works without elevation.
 
 ## Requirements
 
