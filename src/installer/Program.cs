@@ -4,8 +4,11 @@ using SbinInstaller.Models;
 using SbinInstaller.Services;
 using System.CommandLine;
 using System.CommandLine.Binding;
+using System.Diagnostics.CodeAnalysis;
 using System.Reflection;
+using System.Runtime.Versioning;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 
 namespace SbinInstaller;
 
@@ -15,6 +18,7 @@ namespace SbinInstaller;
 /// </summary>
 class Program
 {
+    [SupportedOSPlatform("windows")]
     static async Task<int> Main(string[] args)
     {
         // Set up dependency injection
@@ -129,6 +133,7 @@ class Program
         return await rootCommand.InvokeAsync(args);
     }
 
+    [SupportedOSPlatform("windows")]
     static async Task HandleCommandAsync(InstallOptions options, ILogger<Program> logger, PackageInstaller installer)
     {
         // Handle version display
@@ -142,7 +147,7 @@ class Program
         // Handle config display
         if (options.ShowConfig)
         {
-            var config = JsonSerializer.Serialize(options, new JsonSerializerOptions { WriteIndented = true });
+            var config = SerializeConfigForDisplay(options);
             Console.WriteLine(config);
             return;
         }
@@ -216,6 +221,12 @@ class Program
             logger.LogError("Installation failed: {Message}", result.Message);
             Environment.Exit(result.ExitCode);
         }
+    }
+    
+    [UnconditionalSuppressMessage("Trimming", "IL2026", Justification = "Configuration display is for debugging, trimming compatibility not critical")]
+    private static string SerializeConfigForDisplay(InstallOptions options)
+    {
+        return JsonSerializer.Serialize(options, new JsonSerializerOptions { WriteIndented = true });
     }
 
     static void ShowDomainInfo(bool plistFormat)
