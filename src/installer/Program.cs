@@ -21,9 +21,9 @@ class Program
     [SupportedOSPlatform("windows")]
     static async Task<int> Main(string[] args)
     {
-        // Set up dependency injection
+        // Set up dependency injection with minimal logging initially
         var services = new ServiceCollection();
-        services.AddLogging(builder => builder.AddConsole().SetMinimumLevel(LogLevel.Information));
+        services.AddLogging(builder => builder.AddConsole().SetMinimumLevel(LogLevel.Warning));
         services.AddSingleton<PackageInstaller>();
         
         var serviceProvider = services.BuildServiceProvider();
@@ -31,7 +31,7 @@ class Program
         var installer = serviceProvider.GetRequiredService<PackageInstaller>();
 
         // Create command-line interface
-        var rootCommand = new RootCommand("A lightweight .pkg installer for Windows, inspired by macOS /usr/sbin/installer")
+        var rootCommand = new RootCommand("A lightweight package installer for Windows supporting .pkg and .nupkg formats")
         {
             Name = "installer"
         };
@@ -39,7 +39,7 @@ class Program
         // Core installation options
         var pkgOption = new Option<string>(
             aliases: new[] { "--pkg", "-pkg" },
-            description: "Path to the .pkg file to install")
+            description: "Path to the .pkg or .nupkg file to install")
         {
             IsRequired = false
         };
@@ -47,7 +47,7 @@ class Program
         var targetOption = new Option<string>(
             aliases: new[] { "--target", "-target" },
             description: "Target directory or device for installation",
-            getDefaultValue: () => "/");
+            getDefaultValue: () => "\\");
 
         // Information options
         var pkgInfoOption = new Option<bool>(
@@ -177,8 +177,7 @@ class Program
         // Set logging level based on verbosity
         if (options.Verbose || options.VerboseR || options.DumpLog)
         {
-            // This would require reconfiguring the logger, for now just note the preference
-            logger.LogInformation("Verbose logging enabled");
+            Console.WriteLine("Verbose logging enabled");
         }
 
         // Handle package info display
@@ -196,7 +195,7 @@ class Program
         }
 
         // Default: Install the package
-        logger.LogInformation("Installing package: {PackagePath}", options.PackagePath);
+        Console.WriteLine($"Installing package: {Path.GetFileName(options.PackagePath)}");
         
         var result = await installer.InstallAsync(options);
         
@@ -208,18 +207,35 @@ class Program
                 Console.WriteLine(log);
             }
         }
+        else
+        {
+            // Show key progress information in non-verbose mode
+            foreach (var log in result.Logs)
+            {
+                // Show important progress messages
+                if (log.StartsWith("Package:") || 
+                    log.StartsWith("Script:") ||
+                    log.StartsWith("Files:") ||
+                    (log.StartsWith("Mode:") && log.Contains("Copy-type")) ||
+                    log.Contains("completed successfully") ||
+                    log.Contains("failed"))
+                {
+                    Console.WriteLine(log);
+                }
+            }
+        }
 
         if (result.Success)
         {
-            logger.LogInformation("Installation completed successfully");
+            Console.WriteLine("Installation completed successfully");
             if (!string.IsNullOrEmpty(result.RestartAction) && result.RestartAction != "None")
             {
-                logger.LogWarning("Restart required: {RestartAction}", result.RestartAction);
+                Console.WriteLine($"Restart required: {result.RestartAction}");
             }
         }
         else
         {
-            logger.LogError("Installation failed: {Message}", result.Message);
+            Console.WriteLine($"Installation failed: {result.Message}");
             Environment.Exit(result.ExitCode);
         }
     }
@@ -312,22 +328,52 @@ class Program
                 Console.WriteLine("<?xml version=\"1.0\" encoding=\"UTF-8\"?>");
                 Console.WriteLine("<plist version=\"1.0\">");
                 Console.WriteLine("<dict>");
-                Console.WriteLine($"    <key>Name</key><string>{packageInfo.BuildInfo.Name}</string>");
-                Console.WriteLine($"    <key>Version</key><string>{packageInfo.BuildInfo.Version}</string>");
-                Console.WriteLine($"    <key>Description</key><string>{packageInfo.BuildInfo.Description}</string>");
-                Console.WriteLine($"    <key>RestartAction</key><string>{packageInfo.BuildInfo.RestartAction}</string>");
+                Console.WriteLine($"    <key>Name</key><string>{packageInfo.GetPackageName()}</string>");
+                Console.WriteLine($"    <key>Version</key><string>{packageInfo.GetPackageVersion()}</string>");
+                Console.WriteLine($"    <key>Description</key><string>{packageInfo.GetPackageDescription()}</string>");
+                Console.WriteLine($"    <key>PackageType</key><string>{packageInfo.PackageType}</string>");
+                
+                if (packageInfo.PackageType == PackageType.Pkg)
+                {
+                    Console.WriteLine($"    <key>RestartAction</key><string>{packageInfo.BuildInfo.RestartAction}</string>");
+                }
+                else if (packageInfo.NuspecInfo != null)
+                {
+                    Console.WriteLine($"    <key>Authors</key><string>{packageInfo.NuspecInfo.Metadata.Authors}</string>");
+                    Console.WriteLine($"    <key>Id</key><string>{packageInfo.NuspecInfo.Metadata.Id}</string>");
+                }
+                
                 Console.WriteLine("</dict>");
                 Console.WriteLine("</plist>");
             }
             else
             {
-                Console.WriteLine($"Package: {packageInfo.BuildInfo.Name}");
-                Console.WriteLine($"Version: {packageInfo.BuildInfo.Version}");
-                Console.WriteLine($"Description: {packageInfo.BuildInfo.Description}");
-                Console.WriteLine($"Author: {packageInfo.BuildInfo.Author}");
-                Console.WriteLine($"License: {packageInfo.BuildInfo.License}");
-                Console.WriteLine($"Target: {packageInfo.BuildInfo.Target}");
-                Console.WriteLine($"Restart Action: {packageInfo.BuildInfo.RestartAction}");
+                Console.WriteLine($"Package Type: {packageInfo.PackageType}");
+                Console.WriteLine($"Package: {packageInfo.GetPackageName()}");
+                Console.WriteLine($"Version: {packageInfo.GetPackageVersion()}");
+                Console.WriteLine($"Description: {packageInfo.GetPackageDescription()}");
+                
+                if (packageInfo.PackageType == PackageType.Nupkg && packageInfo.NuspecInfo != null)
+                {
+                    var nuspec = packageInfo.NuspecInfo.Metadata;
+                    Console.WriteLine($"Id: {nuspec.Id}");
+                    Console.WriteLine($"Authors: {nuspec.Authors}");
+                    Console.WriteLine($"Owners: {nuspec.Owners}");
+                    Console.WriteLine($"Project URL: {nuspec.ProjectUrl}");
+                    Console.WriteLine($"License: {nuspec.License?.Value ?? nuspec.LicenseUrl}");
+                    Console.WriteLine($"Tags: {nuspec.Tags}");
+                    Console.WriteLine($"Copyright: {nuspec.Copyright}");
+                    Console.WriteLine($"Dependencies: {nuspec.Dependencies.Count}");
+                }
+                else if (packageInfo.PackageType == PackageType.Pkg)
+                {
+                    // Show BuildInfo details for .pkg files only
+                    Console.WriteLine($"Author: {packageInfo.BuildInfo.Author}");
+                    Console.WriteLine($"Install Location: {packageInfo.BuildInfo.InstallLocation}");
+                    Console.WriteLine($"Target: {packageInfo.BuildInfo.Target}");
+                    Console.WriteLine($"Restart Action: {packageInfo.BuildInfo.RestartAction}");
+                }
+                
                 Console.WriteLine($"Payload Files: {packageInfo.PayloadFiles.Count}");
                 Console.WriteLine($"Has Pre-install Script: {packageInfo.HasPreInstallScript}");
                 Console.WriteLine($"Has Post-install Script: {packageInfo.HasPostInstallScript}");
@@ -355,12 +401,20 @@ class Program
             
             var result = options.QueryFlag?.ToLower() switch
             {
-                "restartaction" => packageInfo.BuildInfo.RestartAction,
-                "name" => packageInfo.BuildInfo.Name,
-                "version" => packageInfo.BuildInfo.Version,
-                "description" => packageInfo.BuildInfo.Description,
-                "author" => packageInfo.BuildInfo.Author,
-                "license" => packageInfo.BuildInfo.License,
+                "restartaction" => packageInfo.PackageType == PackageType.Pkg ? packageInfo.BuildInfo.RestartAction : "None",
+                "name" => packageInfo.GetPackageName(),
+                "version" => packageInfo.GetPackageVersion(),
+                "description" => packageInfo.GetPackageDescription(),
+                "author" => packageInfo.PackageType == PackageType.Nupkg && packageInfo.NuspecInfo != null 
+                    ? packageInfo.NuspecInfo.Metadata.Authors 
+                    : packageInfo.BuildInfo.Author,
+                "license" => packageInfo.PackageType == PackageType.Nupkg && packageInfo.NuspecInfo != null
+                    ? (packageInfo.NuspecInfo.Metadata.License?.Value ?? packageInfo.NuspecInfo.Metadata.LicenseUrl)
+                    : packageInfo.BuildInfo.License,
+                "id" => packageInfo.PackageType == PackageType.Nupkg && packageInfo.NuspecInfo != null
+                    ? packageInfo.NuspecInfo.Metadata.Id
+                    : packageInfo.BuildInfo.Name,
+                "packagetype" => packageInfo.PackageType.ToString(),
                 _ => $"Unknown query flag: {options.QueryFlag}"
             };
             
@@ -425,7 +479,7 @@ public class InstallOptionsBinder : BinderBase<InstallOptions>
         new InstallOptions
         {
             PackagePath = bindingContext.ParseResult.GetValueForOption(_pkgOption) ?? string.Empty,
-            Target = bindingContext.ParseResult.GetValueForOption(_targetOption) ?? "/",
+            Target = bindingContext.ParseResult.GetValueForOption(_targetOption) ?? "\\",
             ShowPkgInfo = bindingContext.ParseResult.GetValueForOption(_pkgInfoOption),
             ShowDomInfo = bindingContext.ParseResult.GetValueForOption(_domInfoOption),
             ShowVolInfo = bindingContext.ParseResult.GetValueForOption(_volInfoOption),
