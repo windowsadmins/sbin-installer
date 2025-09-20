@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<package xmlns="http://schemas.microsoft.com/packaging/2010/07/nuspec.xsd">
+  <metadata>
+    <id>test-package</id>
+    <version>1.2.3</version>
+    <title>Test Package</title>
+    <authors>Test Author</authors>
+    <owners>Test Owner</owners>
+    <description>A test NuGet package for validating .nupkg support in sbin-installer</description>
+    <summary>Test NuGet package with Chocolatey scripts</summary>
+    <releaseNotes>Initial test release</releaseNotes>
+    <copyright>Copyright 2025</copyright>
+    <language>en-US</language>
+    <tags>test chocolatey installer</tags>
+    <licenseUrl>https://opensource.org/licenses/MIT</licenseUrl>
+    <projectUrl>https://github.com/windowsadmins/sbin-installer</projectUrl>
+    <requireLicenseAcceptance>false</requireLicenseAcceptance>
+    <dependencies>
+      <dependency id="sample-dependency" version="1.0.0" />
+    </dependencies>
+  </metadata>
+  <files>
+    <file src="tools\**" target="tools" />
+    <file src="lib\**" target="lib" />
+  </files>
+</package>

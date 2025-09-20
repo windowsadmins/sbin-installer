@@ -1,0 +1,10 @@
+name: "installer-type-example"
+version: "1.0.0"
+description: "Example installer-type package that runs custom installation logic"
+author: "Test Author"
+license: "MIT"
+homepage: "https://example.com"
+target: "/"
+install_location:  # Empty - installer-type package
+restart_action: "None"
+dependencies: []
