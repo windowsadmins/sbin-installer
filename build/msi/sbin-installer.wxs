@@ -1,45 +1,37 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
-  
-  <?ifndef Version?>
-    <?define Version = "1.0.0.0"?>
-  <?endif?>
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs"
+     xmlns:util="http://wixtoolset.org/schemas/v4/wxs/util">
   
   <Package Name="sbin-installer" 
            Language="1033" 
-           Version="$(Version)" 
+           Version="25.9.20.1205" 
            Manufacturer="WindowsAdmins" 
            UpgradeCode="12345678-1234-1234-1234-123456789012"
+           InstallerVersion="500" 
+           Compressed="yes"
            Scope="perMachine">
     
-    <SummaryInformation Description="Lightweight .pkg installer for Windows" />
+    <Media Id="1" Cabinet="sbin-installer.cab" EmbedCab="yes" />
     
-    <!-- Upgrade handling -->
-    <MajorUpgrade DowngradeErrorMessage="A newer version of [ProductName] is already installed." />
-    
-    <!-- Media and cab -->
-    <MediaTemplate EmbedCab="yes" />
-    
-    <!-- Features -->
-    <Feature Id="MainFeature" Title="sbin-installer" Description="Lightweight .pkg installer for Windows" Level="1">
+    <Feature Id="MainFeature" Title="sbin-installer" Level="1">
       <ComponentRef Id="MainExecutable" />
-      <ComponentRef Id="PathEnvironment" />
     </Feature>
     
-    <!-- Directory structure -->
+    <MajorUpgrade AllowDowngrades="yes" 
+                  MigrateFeatures="yes"
+                  Schedule="afterInstallInitialize" />
+    
     <StandardDirectory Id="ProgramFiles64Folder">
-      <Directory Id="SbinFolder" Name="sbin">
-        <Component Id="MainExecutable">
-          <File Id="installer.exe" 
-                Name="installer.exe" 
-                Source="..\..\dist\installer.exe" />
-        </Component>
-        
-        <Component Id="PathEnvironment">
-          <Environment Id="PATH" 
+      <Directory Id="INSTALLFOLDER" Name="sbin">
+        <Component Id="MainExecutable" Guid="A1B2C3D4-E5F6-7890-1234-567890ABCDEF">
+          <File Id="InstallerExe" 
+                Source="$(var.SourceDir)\installer.exe" 
+                KeyPath="yes" />
+          
+          <!-- Add to system PATH -->
+          <Environment Id="PathEnvironment"
                        Name="PATH" 
-                       Value="[SbinFolder]" 
-                       Permanent="no" 
+                       Value="[INSTALLFOLDER]" 
                        Part="last" 
                        Action="set" 
                        System="yes" />
@@ -47,22 +39,10 @@
       </Directory>
     </StandardDirectory>
     
-    <!-- UI -->
-    <UI>
-      <UIRef Id="WixUI_Minimal" />
-    </UI>
-    
-    <WixVariable Id="WixUILicenseRtf" Value="license.rtf" />
-    
     <!-- Properties -->
-    <Property Id="WIXUI_INSTALLDIR" Value="SbinFolder" />
-    <Property Id="ARPHELPLINK" Value="https://github.com/windowsadmins/sbin-installer" />
-    <Property Id="ARPURLINFOABOUT" Value="https://github.com/windowsadmins/sbin-installer" />
-    <Property Id="ARPCOMMENTS" Value="A lightweight .pkg installer for Windows, inspired by macOS /usr/sbin/installer" />
-    <Property Id="ARPCONTACT" Value="https://github.com/windowsadmins/sbin-installer/issues" />
+    <Property Id="MSIRESTARTMANAGERDISABLED" Value="1" />
+    <Property Id="MSISHUTDOWNTIMEOUT" Value="0" />
+    <Property Id="MSIFORCERESTART" Value="0" />
     
   </Package>
 </Wix>
-
-
-
