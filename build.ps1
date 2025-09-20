@@ -31,7 +31,8 @@ function Find-CodeSigningCerts {
     
     foreach ($store in $stores) {
         $storeCerts = Get-ChildItem $store -ErrorAction SilentlyContinue | Where-Object {
-            $_.EnhancedKeyUsageList -like "*Code Signing*" -and 
+            # Allow certificates with Code Signing EKU OR certificates that can be used for signing (have private key)
+            ($_.EnhancedKeyUsageList -like "*Code Signing*" -or $_.HasPrivateKey) -and 
             $_.NotAfter -gt (Get-Date) -and
             ($SubjectFilter -eq "" -or $_.Subject -like "*$SubjectFilter*")
         }
@@ -69,7 +70,13 @@ function Show-CertificateList {
 function Get-BestCertificate {
     $certs = Find-CodeSigningCerts
     
-    # Prefer CurrentUser over LocalMachine, and newest expiration date
+    # First priority: Enterprise certificate (EmilyCarrU Intune)
+    $enterpriseCert = $certs | Where-Object { $_.Subject -like "*EmilyCarrU Intune*" } | Sort-Object NotAfter -Descending | Select-Object -First 1
+    if ($enterpriseCert) {
+        return $enterpriseCert
+    }
+    
+    # Fallback: Prefer CurrentUser over LocalMachine, and newest expiration date
     $best = $certs | Sort-Object @{Expression={$_.Store -eq "Cert:\CurrentUser\My"}; Descending=$true}, NotAfter -Descending | Select-Object -First 1
     
     return $best
@@ -241,104 +248,129 @@ if (-not $SkipMsi) {
     Write-Host ""
     Write-Host "Building MSI package..." -ForegroundColor Green
     
-    $BuildRoot = $PSScriptRoot
-    $MsiPath = Join-Path $BuildRoot "build\msi"
-    
-    # Convert timestamp to MSI-compatible version format
-    $versionParts = $Version.Split('.')
-    if ($versionParts.Length -eq 4) {
-        # For timestamp format YYYY.MM.DD.HHMM, convert to MSI-compatible format
-        $year = [int]$versionParts[0] - 2000  # Convert 2025 to 25 to fit in MSI limits
-        $month = [int]$versionParts[1]
-        $day = [int]$versionParts[2] 
-        $time = [int]$versionParts[3]
-        $msiVersion = "$year.$month.$day.$time"
-    } else {
-        $msiVersion = $Version
-    }
-    
+    # Convert timestamp to MSI-compatible version format (like ReportMate does)
+    $msiVersion = $Version -replace '^20(\d{2})\.0?(\d+)\.0?(\d+)\.(\d{4})$', '$1.$2.$3.$4'
     Write-Host "MSI version: $msiVersion" -ForegroundColor Gray
     
-    # Build MSI
-    $CurrentLocation = Get-Location
+    # Check for WiX v6 by checking global tools list (like ReportMate pattern)
+    $wixFound = $false
     try {
-        Set-Location $MsiPath
-        
-        # Install WiX toolset if not present
-        Write-Host "Ensuring WiX toolset is available..." -ForegroundColor Yellow
-        dotnet tool install --global wix --version 6.0.2 2>$null | Out-Null
-        
-        # Build MSI using WiX 6
-        Write-Host "Compiling MSI package..." -ForegroundColor Yellow
-        try {
-            & wix build sbin-installer.wxs -o "bin\$Configuration\sbin-installer-$Version.msi" -arch x64 -d Version="$msiVersion"
-        } catch {
-            $wixError = $_.Exception.Message
+        $wixTool = & dotnet tool list --global 2>$null | Select-String "wix"
+        if ($wixTool) {
+            $wixFound = $true
+            Write-Host "✅ WiX Toolset v6 found" -ForegroundColor Green
         }
-        
-        if ($LASTEXITCODE -ne 0) {
-            Write-Warning "MSI build failed with exit code $LASTEXITCODE"
-            if ($wixError -and $wixError -match "Access is denied") {
-                Write-Host "⚠ WiX permission issue detected. Try running as Administrator or install WiX locally." -ForegroundColor Yellow
-                Write-Host "To build MSI manually:" -ForegroundColor Gray
-                Write-Host "  cd build\msi" -ForegroundColor Gray
-                Write-Host "  wix build sbin-installer.wxs -o `"bin\$Configuration\sbin-installer-$Version.msi`" -arch x64 -d Version=`"$msiVersion`"" -ForegroundColor Gray
-            }
-        } else {
-            # Find the generated MSI
-            $GeneratedMsi = Get-ChildItem "bin\$Configuration\*.msi" | Select-Object -First 1
+    } catch {
+        Write-Warning "Failed to check for WiX toolset"
+    }
+    
+    if ($wixFound) {
+        try {
+            $MsiDir = Join-Path $PSScriptRoot "build\msi"
+            $MsiStagingDir = Join-Path $PSScriptRoot "build\msi-staging"
             
-            if ($GeneratedMsi) {
-                Write-Host "MSI built successfully: $($GeneratedMsi.FullName)" -ForegroundColor Green
+            # Clean and prepare MSI staging directory
+            if (Test-Path $MsiStagingDir) {
+                Remove-Item $MsiStagingDir -Recurse -Force
+            }
+            New-Item -ItemType Directory -Path $MsiStagingDir -Force | Out-Null
+            
+            # Copy executable to staging
+            Copy-Item $ExePath (Join-Path $MsiStagingDir "installer.exe") -Force
+            Write-Verbose "Copied installer.exe to MSI staging"
+            
+            # Create WXS file with direct version injection (exactly like ReportMate)
+            $WxsPath = Join-Path $MsiDir "sbin-installer.wxs"
+            $WxsContent = @"
+<?xml version="1.0" encoding="UTF-8"?>
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs"
+     xmlns:util="http://wixtoolset.org/schemas/v4/wxs/util">
+  
+  <Package Name="sbin-installer" 
+           Language="1033" 
+           Version="$msiVersion" 
+           Manufacturer="WindowsAdmins" 
+           UpgradeCode="12345678-1234-1234-1234-123456789012"
+           InstallerVersion="500" 
+           Compressed="yes"
+           Scope="perMachine">
+    
+    <Media Id="1" Cabinet="sbin-installer.cab" EmbedCab="yes" />
+    
+    <Feature Id="MainFeature" Title="sbin-installer" Level="1">
+      <ComponentRef Id="MainExecutable" />
+    </Feature>
+    
+    <MajorUpgrade AllowDowngrades="yes" 
+                  MigrateFeatures="yes"
+                  Schedule="afterInstallInitialize" />
+    
+    <StandardDirectory Id="ProgramFiles64Folder">
+      <Directory Id="INSTALLFOLDER" Name="sbin">
+        <Component Id="MainExecutable" Guid="A1B2C3D4-E5F6-7890-1234-567890ABCDEF">
+          <File Id="InstallerExe" 
+                Source="`$(var.SourceDir)\installer.exe" 
+                KeyPath="yes" />
+          
+          <!-- Add to system PATH -->
+          <Environment Id="PathEnvironment"
+                       Name="PATH" 
+                       Value="[INSTALLFOLDER]" 
+                       Part="last" 
+                       Action="set" 
+                       System="yes" />
+        </Component>
+      </Directory>
+    </StandardDirectory>
+    
+    <!-- Properties -->
+    <Property Id="MSIRESTARTMANAGERDISABLED" Value="1" />
+    <Property Id="MSISHUTDOWNTIMEOUT" Value="0" />
+    <Property Id="MSIFORCERESTART" Value="0" />
+    
+  </Package>
+</Wix>
+"@
+            $WxsContent | Set-Content $WxsPath -Encoding UTF8
+            
+            # Build MSI using dotnet wix command (local tool like ReportMate)
+            $MsiPath = Join-Path $PSScriptRoot "dist\sbin-installer-$Version.msi"
+            Write-Host "Building MSI with WiX v6..." -ForegroundColor Yellow
+            
+            & dotnet wix build -out $MsiPath -arch x64 -define "SourceDir=$MsiStagingDir" -define "Version=$msiVersion" $WxsPath
+            
+            if ($LASTEXITCODE -eq 0) {
+                Write-Host "MSI built successfully!" -ForegroundColor Green
                 
                 # Sign MSI if certificate is available
-                if ($CertificateThumbprint) {
+                if ($CertificateThumbprint -and $SignTool) {
                     Write-Host "Signing MSI..." -ForegroundColor Yellow
+                    $null = & $SignTool sign /sha1 $CertificateThumbprint /fd SHA256 /tr $TimeStampServer /td SHA256 $MsiPath 2>&1
                     
-                    # Find signtool.exe (reuse from executable signing)
-                    $SignTool = $null
-                    $PossiblePaths = @(
-                        "${env:ProgramFiles(x86)}\Windows Kits\10\bin\*\x64\signtool.exe",
-                        "${env:ProgramFiles}\Windows Kits\10\bin\*\x64\signtool.exe",
-                        "${env:ProgramFiles(x86)}\Microsoft SDKs\Windows\*\bin\signtool.exe"
-                    )
-                    
-                    foreach ($Path in $PossiblePaths) {
-                        $Found = Get-ChildItem $Path -ErrorAction SilentlyContinue | Sort-Object Name -Descending | Select-Object -First 1
-                        if ($Found) {
-                            $SignTool = $Found.FullName
-                            break
-                        }
-                    }
-                    
-                    if ($SignTool) {
-                        # Sign MSI (suppress verbose output)
-                        $null = & $SignTool sign /sha1 $CertificateThumbprint /fd SHA256 /tr $TimeStampServer /td SHA256 $GeneratedMsi.FullName 2>&1
-                        
-                        if ($LASTEXITCODE -eq 0) {
-                            Write-Host "Successfully signed MSI" -ForegroundColor Green
-                        } else {
-                            Write-Warning "MSI signing failed"
-                        }
+                    if ($LASTEXITCODE -eq 0) {
+                        Write-Host "Successfully signed MSI" -ForegroundColor Green
+                    } else {
+                        Write-Warning "MSI signing failed"
                     }
                 }
                 
-                # Copy MSI to dist folder
-                $FinalMsiPath = Join-Path $PSScriptRoot "dist\sbin-installer-$Version.msi"
-                Copy-Item $GeneratedMsi.FullName $FinalMsiPath -Force
-                
-                # Show MSI info
-                $MsiFile = Get-Item $FinalMsiPath
-                Write-Host "Final MSI: $FinalMsiPath" -ForegroundColor Cyan
+                $MsiFile = Get-Item $MsiPath
+                Write-Host "Final MSI: $MsiPath" -ForegroundColor Cyan
                 Write-Host "MSI size: $([math]::Round($MsiFile.Length / 1MB, 2)) MB" -ForegroundColor Cyan
+                
+                # Clean up staging directory
+                Remove-Item $MsiStagingDir -Recurse -Force -ErrorAction SilentlyContinue
+                
             } else {
-                Write-Warning "MSI file not found after build"
+                Write-Warning "WiX build failed with exit code: $LASTEXITCODE"
             }
+            
+        } catch {
+            Write-Warning "MSI creation failed: $($_.Exception.Message)"
         }
-    } catch {
-        Write-Warning "MSI build failed: $($_.Exception.Message)"
-    } finally {
-        Set-Location $CurrentLocation
+    } else {
+        Write-Warning "WiX Toolset v6 not found - MSI creation skipped"
+        Write-Host "Install with: dotnet tool install --global wix" -ForegroundColor Yellow
     }
 } else {
     Write-Host "Skipping MSI build (use -SkipMsi flag)" -ForegroundColor Yellow
