@@ -1,4 +1,22 @@
+using System.IO;
+using System.Linq;
+
 namespace SbinInstaller.Models;
+
+/// <summary>
+/// Supported package types
+/// </summary>
+public enum PackageType
+{
+    /// <summary>
+    /// Custom .pkg format with build-info.yaml
+    /// </summary>
+    Pkg,
+    /// <summary>
+    /// NuGet .nupkg format with .nuspec metadata
+    /// </summary>
+    Nupkg
+}
 
 /// <summary>
 /// Installation options parsed from command line arguments
@@ -38,11 +56,13 @@ public class InstallResult
 }
 
 /// <summary>
-/// Package information extracted from .pkg file
+/// Package information extracted from .pkg or .nupkg file
 /// </summary>
 public class PackageInfo
 {
+    public PackageType PackageType { get; set; }
     public BuildInfo BuildInfo { get; set; } = new();
+    public NuspecPackage? NuspecInfo { get; set; }
     public string PackagePath { get; set; } = string.Empty;
     public string ExtractedPath { get; set; } = string.Empty;
     public List<string> PayloadFiles { get; set; } = new();
@@ -50,4 +70,149 @@ public class PackageInfo
     public bool HasPostInstallScript { get; set; }
     public bool HasChocolateyBeforeInstall { get; set; }
     public bool HasChocolateyInstall { get; set; }
+
+    /// <summary>
+    /// Get package name, preferring .nuspec id over build-info name
+    /// </summary>
+    public string GetPackageName()
+    {
+        if (PackageType == PackageType.Nupkg && NuspecInfo != null)
+        {
+            // Try title, then id, then extract from id if it looks like a reverse domain
+            var title = string.IsNullOrEmpty(NuspecInfo.Metadata.Title) ? null : NuspecInfo.Metadata.Title;
+            var id = NuspecInfo.Metadata.Id;
+            
+            var name = title ?? id;
+            if (!string.IsNullOrEmpty(name))
+            {
+                // If it's a reverse domain style ID (like ca.emilycarru.winadmins.MayaReset), extract the last part
+                if (name.Contains('.') && !name.Contains(' '))
+                {
+                    var parts = name.Split('.');
+                    return parts[^1]; // Take the last part (MayaReset)
+                }
+                return name;
+            }
+        }
+        
+        // Fallback to BuildInfo name, or extract from filename if nothing else works
+        return BuildInfo?.Name ?? ExtractedPath?.Split(Path.DirectorySeparatorChar).LastOrDefault() ?? "Unknown";
+    }
+
+    /// <summary>
+    /// Get package version from appropriate source
+    /// </summary>
+    public string GetPackageVersion()
+    {
+        return PackageType == PackageType.Nupkg && NuspecInfo != null
+            ? NuspecInfo.Metadata.Version
+            : BuildInfo.Version;
+    }
+
+    /// <summary>
+    /// Get package description from appropriate source
+    /// </summary>
+    public string GetPackageDescription()
+    {
+        return PackageType == PackageType.Nupkg && NuspecInfo != null
+            ? NuspecInfo.Metadata.Description
+            : BuildInfo.Description;
+    }
+
+    /// <summary>
+    /// Determine if this is a copy-type package (files need to be copied to install_location)
+    /// vs installer-type package (scripts handle everything)
+    /// 
+    /// Logic based on cimipkg source code:
+    /// - If no payload → NOT installer-type (script-only)
+    /// - If payload AND install_location is empty/blank → installer-type (return false)
+    /// - If payload AND install_location has value → copy-type (return true)
+    /// </summary>
+    public bool IsCopyTypePackage()
+    {
+        // If no payload files exist, this is a script-only package (not installer-type, not copy-type)
+        if (!PayloadFiles.Any())
+        {
+            return false;
+        }
+
+        // For .pkg packages, use install_location from build-info.yaml
+        if (PackageType == PackageType.Pkg)
+        {
+            // Copy-type if install_location has a value, installer-type if empty/blank
+            return !string.IsNullOrWhiteSpace(BuildInfo.InstallLocation);
+        }
+        
+        // For .nupkg packages, we need to infer the intent since they don't have explicit install_location
+        // We'll use payload content analysis as a heuristic:
+        // - If payload contains installer executables → likely installer-type (return false)
+        // - If payload contains other files → likely copy-type (return true)
+        if (PackageType == PackageType.Nupkg)
+        {
+            // Check for obvious installer files (more specific patterns)
+            bool hasInstallerFiles = PayloadFiles.Any(file => 
+            {
+                string fileName = Path.GetFileName(file).ToLowerInvariant();
+                string extension = Path.GetExtension(file).ToLowerInvariant();
+                
+                // More specific installer detection patterns
+                return extension == ".msi" ||
+                       fileName.Contains("setup") ||
+                       fileName.Contains("installer") ||
+                       fileName.Contains("install") ||
+                       (extension == ".exe" && (
+                           fileName.Contains("setup") ||
+                           fileName.Contains("installer") ||
+                           fileName.Contains("install") ||
+                           fileName.EndsWith("_setup.exe") ||
+                           fileName.EndsWith("_installer.exe") ||
+                           fileName.EndsWith("_install.exe") ||
+                           // Pattern for vendor installers like "AppName_Version_Win.exe"
+                           (fileName.Contains("_win.exe") && fileName.Split('_').Length >= 3)
+                       ));
+            });
+            
+            // Installer files in payload = installer-type package (false)
+            // Other files in payload = copy-type package (true)
+            return !hasInstallerFiles;
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// Get the installation location for copy-type packages
+    /// </summary>
+    public string GetInstallLocation()
+    {
+        // Only .pkg packages can have install_location from build-info.yaml
+        if (PackageType == PackageType.Pkg && !string.IsNullOrWhiteSpace(BuildInfo.InstallLocation))
+        {
+            return BuildInfo.InstallLocation;
+        }
+        
+        // For copy-type .nupkg packages, we need a default install location
+        // This is a reasonable default based on common package contents
+        if (PackageType == PackageType.Nupkg && IsCopyTypePackage())
+        {
+            // Analyze payload to suggest appropriate location
+            if (PayloadFiles.Any(file => Path.GetExtension(file).Equals(".ttf", StringComparison.OrdinalIgnoreCase) ||
+                                       Path.GetExtension(file).Equals(".otf", StringComparison.OrdinalIgnoreCase)))
+            {
+                return @"C:\Windows\Fonts\";
+            }
+            
+            // Default to a program-specific folder
+            var packageName = GetPackageName();
+            if (!string.IsNullOrEmpty(packageName))
+            {
+                return $@"C:\Program Files\{packageName}\";
+            }
+            
+            return @"C:\ProgramData\";
+        }
+        
+        // Installer-type packages don't need install_location
+        return string.Empty;
+    }
 }
