@@ -1,0 +1,6 @@
+This is a test application file from the .nupkg package.
+It demonstrates how content files are installed by the sbin-installer.
+
+Installation timestamp: {TIMESTAMP}
+Package version: 1.2.3
+Package ID: test-package
