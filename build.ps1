@@ -279,62 +279,11 @@ if (-not $SkipMsi) {
             Copy-Item $ExePath (Join-Path $MsiStagingDir "installer.exe") -Force
             Write-Verbose "Copied installer.exe to MSI staging"
             
-            # Create WXS file with direct version injection (exactly like ReportMate)
+            # Use the static WXS file with dynamic version injection
             $WxsPath = Join-Path $MsiDir "sbin-installer.wxs"
-            $WxsContent = @"
-<?xml version="1.0" encoding="UTF-8"?>
-<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs"
-     xmlns:util="http://wixtoolset.org/schemas/v4/wxs/util">
-  
-  <Package Name="sbin-installer" 
-           Language="1033" 
-           Version="$msiVersion" 
-           Manufacturer="WindowsAdmins" 
-           UpgradeCode="12345678-1234-1234-1234-123456789012"
-           InstallerVersion="500" 
-           Compressed="yes"
-           Scope="perMachine">
-    
-    <Media Id="1" Cabinet="sbin-installer.cab" EmbedCab="yes" />
-    
-    <Feature Id="MainFeature" Title="sbin-installer" Level="1">
-      <ComponentRef Id="MainExecutable" />
-    </Feature>
-    
-    <MajorUpgrade AllowDowngrades="yes" 
-                  MigrateFeatures="yes"
-                  Schedule="afterInstallInitialize" />
-    
-    <StandardDirectory Id="ProgramFiles64Folder">
-      <Directory Id="INSTALLFOLDER" Name="sbin">
-        <Component Id="MainExecutable" Guid="A1B2C3D4-E5F6-7890-1234-567890ABCDEF">
-          <File Id="InstallerExe" 
-                Source="`$(var.SourceDir)\installer.exe" 
-                KeyPath="yes" />
-          
-          <!-- Add to system PATH -->
-          <Environment Id="PathEnvironment"
-                       Name="PATH" 
-                       Value="[INSTALLFOLDER]" 
-                       Part="last" 
-                       Action="set" 
-                       System="yes" />
-        </Component>
-      </Directory>
-    </StandardDirectory>
-    
-    <!-- Properties -->
-    <Property Id="MSIRESTARTMANAGERDISABLED" Value="1" />
-    <Property Id="MSISHUTDOWNTIMEOUT" Value="0" />
-    <Property Id="MSIFORCERESTART" Value="0" />
-    
-  </Package>
-</Wix>
-"@
-            $WxsContent | Set-Content $WxsPath -Encoding UTF8
             
             # Build MSI using dotnet wix command (local tool like ReportMate)
-            $MsiPath = Join-Path $PSScriptRoot "dist\sbin-installer-$Version.msi"
+            $MsiPath = Join-Path $PSScriptRoot "dist\Installer-$Version.msi"
             Write-Host "Building MSI with WiX v6..." -ForegroundColor Yellow
             
             & dotnet wix build -out $MsiPath -arch x64 -define "SourceDir=$MsiStagingDir" -define "Version=$msiVersion" $WxsPath
