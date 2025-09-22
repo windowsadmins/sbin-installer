@@ -338,7 +338,7 @@ if (-not $SkipMsi) {
             $WxsContent | Set-Content $WxsPath -Encoding UTF8
             
             # Build MSI using dotnet wix command (local tool like ReportMate)
-            $MsiPath = Join-Path $PSScriptRoot "dist\sbin-installer-$Version.msi"
+            $MsiPath = Join-Path $PSScriptRoot "dist\Installer-$Version.msi"
             Write-Host "Building MSI with WiX v6..." -ForegroundColor Yellow
             
             & dotnet wix build -out $MsiPath -arch x64 -define "SourceDir=$MsiStagingDir" -define "Version=$msiVersion" $WxsPath
