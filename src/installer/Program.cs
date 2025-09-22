@@ -36,6 +36,15 @@ class Program
             Name = "installer"
         };
 
+        // Add positional argument for package path
+        var packageArgument = new Argument<string?>(
+            name: "package",
+            description: "Path to the .pkg or .nupkg file to install")
+        {
+            Arity = ArgumentArity.ZeroOrOne
+        };
+        rootCommand.AddArgument(packageArgument);
+
         // Core installation options
         var pkgOption = new Option<string>(
             aliases: new[] { "--pkg", "-pkg" },
@@ -126,7 +135,7 @@ class Program
             }
         },
         new InstallOptionsBinder(
-            pkgOption, targetOption, pkgInfoOption, domInfoOption, volInfoOption,
+            packageArgument, pkgOption, targetOption, pkgInfoOption, domInfoOption, volInfoOption,
             queryOption, verboseOption, verboseROption, dumpLogOption, plistOption,
             allowUntrustedOption, versionOption, configOption));
 
@@ -439,6 +448,7 @@ class Program
 /// </summary>
 public class InstallOptionsBinder : BinderBase<InstallOptions>
 {
+    private readonly Argument<string?> _packageArgument;
     private readonly Option<string> _pkgOption;
     private readonly Option<string> _targetOption;
     private readonly Option<bool> _pkgInfoOption;
@@ -454,12 +464,13 @@ public class InstallOptionsBinder : BinderBase<InstallOptions>
     private readonly Option<bool> _configOption;
 
     public InstallOptionsBinder(
-        Option<string> pkgOption, Option<string> targetOption, Option<bool> pkgInfoOption,
+        Argument<string?> packageArgument, Option<string> pkgOption, Option<string> targetOption, Option<bool> pkgInfoOption,
         Option<bool> domInfoOption, Option<bool> volInfoOption, Option<string?> queryOption,
         Option<bool> verboseOption, Option<bool> verboseROption, Option<bool> dumpLogOption,
         Option<bool> plistOption, Option<bool> allowUntrustedOption, Option<bool> versionOption,
         Option<bool> configOption)
     {
+        _packageArgument = packageArgument;
         _pkgOption = pkgOption;
         _targetOption = targetOption;
         _pkgInfoOption = pkgInfoOption;
@@ -475,10 +486,16 @@ public class InstallOptionsBinder : BinderBase<InstallOptions>
         _configOption = configOption;
     }
 
-    protected override InstallOptions GetBoundValue(BindingContext bindingContext) =>
-        new InstallOptions
+    protected override InstallOptions GetBoundValue(BindingContext bindingContext)
+    {
+        // Get package path from positional argument or --pkg option, prioritizing --pkg
+        var pkgOptionValue = bindingContext.ParseResult.GetValueForOption(_pkgOption);
+        var packageArgument = bindingContext.ParseResult.GetValueForArgument(_packageArgument);
+        var packagePath = !string.IsNullOrEmpty(pkgOptionValue) ? pkgOptionValue : packageArgument ?? string.Empty;
+        
+        return new InstallOptions
         {
-            PackagePath = bindingContext.ParseResult.GetValueForOption(_pkgOption) ?? string.Empty,
+            PackagePath = packagePath,
             Target = bindingContext.ParseResult.GetValueForOption(_targetOption) ?? "\\",
             ShowPkgInfo = bindingContext.ParseResult.GetValueForOption(_pkgInfoOption),
             ShowDomInfo = bindingContext.ParseResult.GetValueForOption(_domInfoOption),
@@ -492,4 +509,5 @@ public class InstallOptionsBinder : BinderBase<InstallOptions>
             ShowVersion = bindingContext.ParseResult.GetValueForOption(_versionOption),
             ShowConfig = bindingContext.ParseResult.GetValueForOption(_configOption)
         };
+    }
 }
