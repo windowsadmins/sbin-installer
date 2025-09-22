@@ -279,16 +279,20 @@ if (-not $SkipMsi) {
             Copy-Item $ExePath (Join-Path $MsiStagingDir "installer.exe") -Force
             Write-Verbose "Copied installer.exe to MSI staging"
             
-            # Create WXS file with direct version injection (exactly like ReportMate)
+            # Create WXS file with dynamic version (exactly like CimianTools Cimian.wxs)
             $WxsPath = Join-Path $MsiDir "sbin-installer.wxs"
             $WxsContent = @"
 <?xml version="1.0" encoding="UTF-8"?>
 <Wix xmlns="http://wixtoolset.org/schemas/v4/wxs"
      xmlns:util="http://wixtoolset.org/schemas/v4/wxs/util">
+
+  <?ifndef Version?>
+    <?define Version = "0.0.0.0"?>
+  <?endif?>
   
   <Package Name="sbin-installer" 
            Language="1033" 
-           Version="$msiVersion" 
+           Version="`$(var.Version)" 
            Manufacturer="WindowsAdmins" 
            UpgradeCode="12345678-1234-1234-1234-123456789012"
            InstallerVersion="500" 
