@@ -214,7 +214,21 @@ public class PackageInstaller
 
             var packageName = packageInfo.GetPackageName();
             var packageVersion = packageInfo.GetPackageVersion();
-            logs.Add($"Package: {packageName} v{packageVersion} ({packageInfo.PackageType})");
+            
+            // Format package info more professionally
+            if (!string.IsNullOrEmpty(packageName) && !string.IsNullOrEmpty(packageVersion))
+            {
+                logs.Add($"Package: {packageName} v{packageVersion} ({packageInfo.PackageType})");
+            }
+            else if (!string.IsNullOrEmpty(packageName))
+            {
+                logs.Add($"Package: {packageName} ({packageInfo.PackageType})");
+            }
+            else
+            {
+                logs.Add($"Package: {Path.GetFileNameWithoutExtension(options.PackagePath)} ({packageInfo.PackageType})");
+            }
+            
             if (IsElevated())
             {
                 logs.Add("Privileges: Running with administrator privileges");
@@ -234,7 +248,7 @@ public class PackageInstaller
                 var resolvedInstallPath = Path.IsPathRooted(installLocation) 
                     ? installLocation 
                     : Path.Combine(targetRoot, installLocation.TrimStart('\\', '/'));
-                logs.Add($"Mode: Copy-type package → {resolvedInstallPath}");
+                logs.Add($"Mode: Copy-type package -> {resolvedInstallPath}");
             }
             else
             {
@@ -463,7 +477,9 @@ public class PackageInstaller
             UseShellExecute = false,
             RedirectStandardOutput = true,
             RedirectStandardError = true,
-            CreateNoWindow = true
+            CreateNoWindow = true,
+            StandardOutputEncoding = System.Text.Encoding.UTF8,
+            StandardErrorEncoding = System.Text.Encoding.UTF8
         };
 
         // Set up environment variables for chocolatey compatibility
@@ -483,12 +499,14 @@ public class PackageInstaller
         process.OutputDataReceived += (sender, e) => {
             if (!string.IsNullOrEmpty(e.Data))
             {
-                output.AppendLine(e.Data);
-                logs.Add(e.Data);
+                // Clean up common Unicode artifacts that don't display well in console
+                var cleanedOutput = CleanScriptOutput(e.Data);
+                output.AppendLine(cleanedOutput);
+                logs.Add(cleanedOutput);
                 // Only show script output when VerboseR or DumpLog is enabled
                 if (options.VerboseR || options.DumpLog)
                 {
-                    _logger.LogDebug("Script output: {Output}", e.Data);
+                    _logger.LogDebug("Script output: {Output}", cleanedOutput);
                 }
             }
         };
@@ -496,12 +514,13 @@ public class PackageInstaller
         process.ErrorDataReceived += (sender, e) => {
             if (!string.IsNullOrEmpty(e.Data))
             {
-                output.AppendLine(e.Data);
-                logs.Add($"ERROR: {e.Data}");
+                var cleanedError = CleanScriptOutput(e.Data);
+                output.AppendLine(cleanedError);
+                logs.Add($"ERROR: {cleanedError}");
                 // Only show script errors when VerboseR or DumpLog is enabled
                 if (options.VerboseR || options.DumpLog)
                 {
-                    _logger.LogDebug("Script error: {Error}", e.Data);
+                    _logger.LogDebug("Script error: {Error}", cleanedError);
                 }
             }
         };
@@ -513,5 +532,33 @@ public class PackageInstaller
         await process.WaitForExitAsync();
         
         return (process.ExitCode, output.ToString(), logs);
+    }
+
+    /// <summary>
+    /// Clean up common Unicode artifacts and formatting issues from script output
+    /// </summary>
+    private static string CleanScriptOutput(string input)
+    {
+        if (string.IsNullOrEmpty(input))
+            return input;
+            
+        // Replace common Unicode artifacts with ASCII equivalents
+        // Use character codes to avoid encoding issues in source
+        var cleaned = input;
+        
+        // Replace various check mark Unicode variations with simple check
+        cleaned = System.Text.RegularExpressions.Regex.Replace(cleaned, @"â[oœ]\.?", "✓");
+        
+        // Replace arrow variants with simple ASCII arrow
+        cleaned = System.Text.RegularExpressions.Regex.Replace(cleaned, @"[â†'âžœâž¡→]", "->");
+        
+        // Replace bullet point variations
+        cleaned = System.Text.RegularExpressions.Regex.Replace(cleaned, @"â€¢", "•");
+        
+        // Replace other common artifacts
+        cleaned = cleaned.Replace("âœ–", "×");     // Cross mark -> ASCII X
+        cleaned = cleaned.Replace("â–¶", ">");     // Play button -> greater than
+        
+        return cleaned.Trim();
     }
 }
