@@ -96,7 +96,22 @@ public class PackageInfo
         }
         
         // Fallback to BuildInfo name, or extract from filename if nothing else works
-        return BuildInfo?.Name ?? ExtractedPath?.Split(Path.DirectorySeparatorChar).LastOrDefault() ?? "Unknown";
+        var buildInfoName = BuildInfo?.Name;
+        if (!string.IsNullOrEmpty(buildInfoName))
+        {
+            return buildInfoName;
+        }
+        
+        // Final fallback: extract name from package filename
+        if (!string.IsNullOrEmpty(PackagePath))
+        {
+            var fileName = Path.GetFileNameWithoutExtension(PackagePath);
+            // Remove version-like patterns from filename (e.g., "Package-v1.2.3" -> "Package")
+            var versionPattern = @"-v?\d+(\.\d+)*(-\w+)*$";
+            return System.Text.RegularExpressions.Regex.Replace(fileName, versionPattern, "", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+        }
+        
+        return "Unknown Package";
     }
 
     /// <summary>
@@ -104,9 +119,28 @@ public class PackageInfo
     /// </summary>
     public string GetPackageVersion()
     {
-        return PackageType == PackageType.Nupkg && NuspecInfo != null
-            ? NuspecInfo.Metadata.Version
-            : BuildInfo.Version;
+        if (PackageType == PackageType.Nupkg && NuspecInfo != null && !string.IsNullOrEmpty(NuspecInfo.Metadata.Version))
+        {
+            return NuspecInfo.Metadata.Version;
+        }
+        
+        if (!string.IsNullOrEmpty(BuildInfo?.Version))
+        {
+            return BuildInfo.Version;
+        }
+        
+        // Try to extract version from package filename as fallback
+        if (!string.IsNullOrEmpty(PackagePath))
+        {
+            var fileName = Path.GetFileNameWithoutExtension(PackagePath);
+            var versionMatch = System.Text.RegularExpressions.Regex.Match(fileName, @"v?(\d+(?:\.\d+)+(?:-\w+)?)", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+            if (versionMatch.Success)
+            {
+                return versionMatch.Groups[1].Value;
+            }
+        }
+        
+        return string.Empty;
     }
 
     /// <summary>
