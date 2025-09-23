@@ -1,6 +1,10 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <Wix xmlns="http://wixtoolset.org/schemas/v4/wxs"
      xmlns:util="http://wixtoolset.org/schemas/v4/wxs/util">
+
+  <?ifndef Version?>
+    <?define Version = "0.0.0.0"?>
+  <?endif?>
   
   <Package Name="sbin-installer" 
            Language="1033" 
@@ -11,13 +15,15 @@
            Compressed="yes"
            Scope="perMachine">
     
-    <Media Id="1" Cabinet="sbin-installer.cab" EmbedCab="yes" />
+    <Media Id="1" Cabinet="product.cab" EmbedCab="yes" />
     
     <Feature Id="MainFeature" Title="sbin-installer" Level="1">
       <ComponentRef Id="MainExecutable" />
     </Feature>
     
-    <MajorUpgrade AllowDowngrades="yes" 
+    <MajorUpgrade AllowSameVersionUpgrades="no" 
+                  AllowDowngrades="no"
+                  DowngradeErrorMessage="A newer version of [ProductName] is already installed."
                   MigrateFeatures="yes"
                   Schedule="afterInstallInitialize" />
     
@@ -25,7 +31,7 @@
       <Directory Id="INSTALLFOLDER" Name="sbin">
         <Component Id="MainExecutable" Guid="A1B2C3D4-E5F6-7890-1234-567890ABCDEF">
           <File Id="InstallerExe" 
-                Source="$(var.SourceDir)\installer.exe" 
+                Source="$(var.BIN_DIR)\installer.exe" 
                 KeyPath="yes" />
           
           <!-- Add to system PATH -->
