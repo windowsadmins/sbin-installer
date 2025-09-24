@@ -392,7 +392,7 @@ foreach ($RuntimeId in $RuntimeIds) {
                 Remove-Item $MsiStagingDir -Recurse -Force -ErrorAction SilentlyContinue
                 
             } catch {
-                Write-Error "MSI creation failed for ${ArchName}: $($_.Exception.Message)"
+                Write-Error "MSI creation failed for $ArchName : $($_.Exception.Message)"
                 continue
             }
         }
