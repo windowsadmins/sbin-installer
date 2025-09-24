@@ -17,6 +17,7 @@
 
   <PropertyGroup>
     <DefineConstants>BIN_DIR=$(BinDir);ProductVersion=$(ProductVersion)</DefineConstants>
+    <SuppressIces>ICE61</SuppressIces>
   </PropertyGroup>
 
   <ItemGroup>
