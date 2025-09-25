@@ -13,7 +13,7 @@ param(
     [switch]$SkipMsi,
     [string]$Version = "",
     [ValidateSet("x64", "arm64", "both", "auto")]
-    [string]$Architecture = "auto"
+    [string]$Architecture = "both"
 )
 
 $ErrorActionPreference = "Stop"
