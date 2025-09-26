@@ -6,10 +6,10 @@
     <?define Version = "0.0.0.0"?>
   <?endif?>
   
-  <Package Name="sbin-installer" 
+  <Package Name="SbinInstaller" 
            Language="1033" 
            Version="$(var.Version)" 
-           Manufacturer="WindowsAdmins" 
+           Manufacturer="Windows Admins Open Source" 
            UpgradeCode="12345678-1234-1234-1234-123456789012"
            InstallerVersion="500" 
            Compressed="yes"
@@ -49,6 +49,21 @@
     
     <!-- Suppress ICE validation warnings that might block installation -->
     <Property Id="MSIFASTINSTALL" Value="3" />
+    
+    <!-- Additional product metadata -->
+    <Property Id="ARPPRODUCTICON" Value="InstallerExe" />
+    <Property Id="ARPCOMMENTS" Value="A lightweight, deterministic .pkg installer for Windows, inspired by the elegant simplicity of macOS package installation /usr/sbin/installer" />
+    <Property Id="ARPCONTACT" Value="Windows Admins Open Source" />
+    <Property Id="ARPURLINFOABOUT" Value="https://github.com/windowsadmins/sbin-installer" />
+    <Property Id="ARPNOREPAIR" Value="1" />
+    <Property Id="ARPNOMODIFY" Value="1" />
+    
+    <!-- Custom properties for better metadata exposure -->
+    <Property Id="PRODUCTCATEGORY" Value="Management" />
+    <Property Id="PRODUCTDESCRIPTION" Value="A lightweight, deterministic .pkg installer for Windows, inspired by the elegant simplicity of macOS package installation /usr/sbin/installer" />
+    <Property Id="KEYWORDS" Value="installer,package,pkg,management,windows" />
+    <Property Id="DEVELOPER" Value="Windows Admins Open Source" />
+    <Property Id="PRODUCTWEBSITE" Value="https://github.com/windowsadmins/sbin-installer" />
     
   </Package>
 </Wix>
