@@ -482,11 +482,25 @@ public class PackageInstaller
             StandardErrorEncoding = System.Text.Encoding.UTF8
         };
 
-        // Set up environment variables for chocolatey compatibility
-        // For .nupkg packages, set $payloadRoot like cimipkg does
+        // Set up environment variables for payload access
+        // Must copy existing environment first, then add custom variables
         string payloadDir = Path.Combine(workingDirectory, "payload");
         if (Directory.Exists(payloadDir))
         {
+            // Copy all existing environment variables to the process
+            // This is critical - if we don't copy the environment, the child process will have NO environment variables
+            foreach (System.Collections.DictionaryEntry envVar in Environment.GetEnvironmentVariables())
+            {
+                var key = envVar.Key?.ToString();
+                var value = envVar.Value?.ToString();
+                if (!string.IsNullOrEmpty(key) && value != null)
+                {
+                    startInfo.EnvironmentVariables[key] = value;
+                }
+            }
+            
+            // Add payload-specific environment variables for installer-type packages
+            // These allow scripts to access the payload directory (e.g., $env:payloadRoot in PowerShell)
             startInfo.EnvironmentVariables["payloadRoot"] = payloadDir;
             startInfo.EnvironmentVariables["payloadDir"] = payloadDir;
             startInfo.EnvironmentVariables["PAYLOAD_ROOT"] = payloadDir;
