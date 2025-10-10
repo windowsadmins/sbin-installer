@@ -216,13 +216,18 @@ public class PackageInfo
 
     /// <summary>
     /// Get the installation location for copy-type packages
+    /// For .pkg files, ONLY use install_location from build-info.yaml
+    /// - If install_location has value → copy payload to that location
+    /// - If install_location is empty → installer-type (scripts run in place, no copy)
+    /// - NEVER generate default paths for .pkg files
     /// </summary>
     public string GetInstallLocation()
     {
-        // Only .pkg packages can have install_location from build-info.yaml
-        if (PackageType == PackageType.Pkg && !string.IsNullOrWhiteSpace(BuildInfo.InstallLocation))
+        // For .pkg packages: STRICTLY honor build-info.yaml install_location
+        if (PackageType == PackageType.Pkg)
         {
-            return BuildInfo.InstallLocation;
+            // Return install_location exactly as specified (can be empty for installer-type packages)
+            return BuildInfo.InstallLocation?.Trim() ?? string.Empty;
         }
         
         // For copy-type .nupkg packages, we need a default install location
