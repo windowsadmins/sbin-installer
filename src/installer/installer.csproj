@@ -35,4 +35,8 @@
     <TrimmerRootAssembly Include="YamlDotNet" />
   </ItemGroup>
 
+  <ItemGroup>
+    <EmbeddedResource Include="Resources\chocolatey-helpers.ps1" />
+  </ItemGroup>
+
 </Project>
