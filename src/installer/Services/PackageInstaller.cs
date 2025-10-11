@@ -433,6 +433,34 @@ public class PackageInstaller
         };
     }
 
+    /// <summary>
+    /// Extract the chocolatey-helpers.ps1 shim from embedded resources
+    /// </summary>
+    private async Task ExtractChocolateyHelpersAsync(string targetPath)
+    {
+        var assembly = typeof(PackageInstaller).Assembly;
+        var resourceName = "SbinInstaller.Resources.chocolatey-helpers.ps1";
+        
+        using var stream = assembly.GetManifestResourceStream(resourceName);
+        if (stream == null)
+        {
+            // Fallback: read from file system if embedded resource not found
+            var helpersPath = Path.Combine(AppContext.BaseDirectory, "Resources", "chocolatey-helpers.ps1");
+            if (File.Exists(helpersPath))
+            {
+                File.Copy(helpersPath, targetPath, true);
+                return;
+            }
+            
+            throw new FileNotFoundException($"Could not find chocolatey-helpers.ps1 as embedded resource or file: {resourceName}");
+        }
+        
+        // Read with UTF-8 encoding and write with UTF-8 encoding to preserve characters
+        using var reader = new StreamReader(stream, System.Text.Encoding.UTF8);
+        var content = await reader.ReadToEndAsync();
+        await File.WriteAllTextAsync(targetPath, content, System.Text.Encoding.UTF8);
+    }
+
     private void MirrorDirectory(string sourceDir, string targetDir)
     {
         if (!Directory.Exists(targetDir))
@@ -486,10 +514,31 @@ public class PackageInstaller
     {
         var logs = new List<string>();
         
+        // Check if this is a Chocolatey script (in tools/ directory)
+        var isChocolateyScript = scriptPath.Contains($"{Path.DirectorySeparatorChar}tools{Path.DirectorySeparatorChar}");
+        
+        // Prepare the command - for Chocolatey scripts, inject helper shim
+        string arguments;
+        if (isChocolateyScript)
+        {
+            // Extract chocolatey-helpers.ps1 from embedded resources to temp directory
+            var helpersPath = Path.Combine(Path.GetTempPath(), $"chocolatey-helpers-{Guid.NewGuid():N}.ps1");
+            await ExtractChocolateyHelpersAsync(helpersPath);
+            
+            // Build command that dots-sources the helpers then runs the script
+            arguments = $"-ExecutionPolicy Bypass -Command \"& {{ . '{helpersPath}'; . '{scriptPath}' }}\"";
+            
+            _logger.LogDebug("Running Chocolatey script with helper shim: {ScriptPath}", scriptPath);
+        }
+        else
+        {
+            arguments = $"-ExecutionPolicy Bypass -File \"{scriptPath}\"";
+        }
+        
         var startInfo = new ProcessStartInfo
         {
             FileName = "powershell.exe",
-            Arguments = $"-ExecutionPolicy Bypass -File \"{scriptPath}\"",
+            Arguments = arguments,
             WorkingDirectory = workingDirectory,
             UseShellExecute = false,
             RedirectStandardOutput = true,
@@ -511,13 +560,25 @@ public class PackageInstaller
             }
         }
         
-        // .pkg structure is always: /payload, /scripts, build-info.yaml
-        // Always set payload directory path - scripts can rely on this
-        string payloadDir = Path.Combine(workingDirectory, "payload");
-        startInfo.EnvironmentVariables["payloadRoot"] = payloadDir;
-        startInfo.EnvironmentVariables["payloadDir"] = payloadDir;
-        startInfo.EnvironmentVariables["PAYLOAD_ROOT"] = payloadDir;
-        startInfo.EnvironmentVariables["PAYLOAD_DIR"] = payloadDir;
+        // Set environment variables based on package type
+        if (isChocolateyScript)
+        {
+            // Chocolatey-style environment variables
+            var packageName = Path.GetFileNameWithoutExtension(scriptPath);
+            startInfo.EnvironmentVariables["ChocolateyPackageName"] = packageName;
+            startInfo.EnvironmentVariables["ChocolateyPackageFolder"] = workingDirectory;
+            startInfo.EnvironmentVariables["ChocolateyPackageVersion"] = "unknown";
+        }
+        else
+        {
+            // .pkg structure is always: /payload, /scripts, build-info.yaml
+            // Always set payload directory path - scripts can rely on this
+            string payloadDir = Path.Combine(workingDirectory, "payload");
+            startInfo.EnvironmentVariables["payloadRoot"] = payloadDir;
+            startInfo.EnvironmentVariables["payloadDir"] = payloadDir;
+            startInfo.EnvironmentVariables["PAYLOAD_ROOT"] = payloadDir;
+            startInfo.EnvironmentVariables["PAYLOAD_DIR"] = payloadDir;
+        }
 
         using var process = new Process { StartInfo = startInfo };
         var output = new System.Text.StringBuilder();

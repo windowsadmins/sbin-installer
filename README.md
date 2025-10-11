@@ -41,6 +41,43 @@ package.pkg (ZIP file)
 └── build-info.yaml            # Package metadata
 ```
 
+### Chocolatey Package Support
+
+`sbin-installer` also supports `.nupkg` (NuGet/Chocolatey) packages with automatic compatibility shims:
+
+**What's Supported:**
+- ✅ All NuGet schema versions (2010/07, 2011/08, 2012/06, 2013/01, etc.)
+- ✅ Common Chocolatey helper functions automatically shimmed:
+  - `Install-ChocolateyPath`, `Install-ChocolateyEnvironmentVariable`
+  - `Install-ChocolateyPackage`, `Install-ChocolateyZipPackage`
+  - `Get-ChocolateyWebFile`, `Get-ChocolateyUnzip`, `Install-ChocolateyShortcut`
+  - Plus utility functions for architecture detection and environment management
+- ✅ Automatic detection of `tools/chocolatey*.ps1` scripts with helper injection
+- ✅ Tested with real packages (osquery 5.19.0, and more)
+
+**Example:**
+```powershell
+# Install Chocolatey packages directly - no Chocolatey installation needed
+installer.exe osquery.5.19.0.nupkg
+
+# Result: Files installed, PATH updated, services configured automatically
+```
+
+**What's NOT Supported:**
+- Package management database and state tracking
+- Chocolatey sources/feeds and repository management  
+- Automatic dependency resolution
+- Package upgrades and side-by-side versions
+- All ~50+ Chocolatey helpers (only common ones)
+
+**When to Use:**
+- ✅ Deploying via Intune, SCCM, or scripts with local/network `.nupkg` files
+- ✅ Need lightweight, deterministic installation without Chocolatey overhead
+- ✅ Want macOS-style `/usr/sbin/installer` behavior on Windows
+- ❌ Need full package management with dependencies and updates → Use Chocolatey
+
+A bridge between `.pkg` and `.nupkg` formats for deployment scenarios.
+
 ### Installation Process
 
 1. **Extract** the `.pkg` (really a zip) to a temporary directory
@@ -159,11 +196,14 @@ dependencies: []
 |---------|------------|----------------|
 | Cache management | Complex | None |
 | Source repositories | Required | Direct file path |
-| Package format | `.nupkg` | `.pkg` (same ZIP, better name) |
+| Package format | `.nupkg` | `.pkg` (ZIP) + `.nupkg` support |
 | Dependency resolution | Full tree | Simple list |
-| Script support | tools\chocolatey*.ps1 | + scripts/*.ps1 |
+| Script support | tools\chocolatey*.ps1 | ✅ Supported via shim + scripts/*.ps1 |
+| Chocolatey helpers | Native | ✅ Common helpers shimmed |
 | Performance | Slow | Fast |
 | Complexity | High | Minimal |
+| Package database | Yes | No |
+| Use case | Package management | Direct installation |
 
 ## Installation
 
