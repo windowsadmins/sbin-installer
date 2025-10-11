@@ -3,6 +3,7 @@ using SbinInstaller.Models;
 using System.Diagnostics;
 using System.IO.Compression;
 using System.Security.Principal;
+using System.Xml;
 using System.Xml.Serialization;
 using YamlDotNet.Serialization;
 
@@ -63,9 +64,25 @@ public class PackageInstaller
 
         try
         {
+            // Load XML and strip namespaces to support all NuGet schema versions
+            var xmlDoc = new System.Xml.Linq.XDocument();
+            using (var fileStream = File.OpenRead(nuspecPath))
+            {
+                xmlDoc = System.Xml.Linq.XDocument.Load(fileStream);
+            }
+            
+            // Remove all namespace declarations
+            foreach (var element in xmlDoc.Descendants())
+            {
+                element.Name = element.Name.LocalName;
+                element.ReplaceAttributes(element.Attributes()
+                    .Where(a => !a.IsNamespaceDeclaration));
+            }
+            
+            // Now deserialize the namespace-free XML
             var serializer = new XmlSerializer(typeof(NuspecPackage));
-            using var fileStream = File.OpenRead(nuspecPath);
-            var nuspec = (NuspecPackage?)serializer.Deserialize(fileStream);
+            using var reader = xmlDoc.CreateReader();
+            var nuspec = (NuspecPackage?)serializer.Deserialize(reader);
             return Task.FromResult(nuspec);
         }
         catch (Exception ex)
