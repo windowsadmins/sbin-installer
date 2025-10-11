@@ -41,8 +41,10 @@ public class BuildInfo
 
 /// <summary>
 /// Represents .nuspec metadata from NuGet packages (.nupkg files)
+/// Note: Namespace is omitted to support all NuGet schema versions
+/// (2010/07, 2011/08, 2011/10, 2012/06, 2013/01, etc.)
 /// </summary>
-[XmlRoot("package", Namespace = "http://schemas.microsoft.com/packaging/2010/07/nuspec.xsd")]
+[XmlRoot("package", Namespace = "")]
 public class NuspecPackage
 {
     [XmlElement("metadata")]
