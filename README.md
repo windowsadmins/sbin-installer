@@ -68,7 +68,7 @@ package.pkg
 
 ### Chocolatey Package Support
 
-`sbin-installer` also supports `.nupkg` (NuGet/Chocolatey) packages with automatic compatibility shims:
+`sbin-installer` installs `.nupkg` (NuGet/Chocolatey) packages with automatic compatibility shims:
 
 **What's Supported:**
 - All NuGet schema versions (2010/07, 2011/08, 2012/06, 2013/01, etc.)
@@ -97,8 +97,6 @@ installer.exe osquery.5.19.0.nupkg
 - **Yes:** Need lightweight, deterministic installation without Chocolatey overhead
 - **Yes:** Want macOS-style `/usr/sbin/installer` behavior on Windows
 - **No:** Need full package management with dependencies and updates → Use Chocolatey
-
-A bridge between `.pkg` and `.nupkg` formats for deployment scenarios.
 
 ### Installation Process
 
