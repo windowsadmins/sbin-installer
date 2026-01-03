@@ -31,37 +31,39 @@ A minimal, focused installer that:
 
 ## How It Works
 
-### .pkg Format (cimipkg)
-
-A `.pkg` file is a ZIP archive created by [cimipkg](https://github.com/windowsadmins/cimian-pkg) with a specific structure designed for simple, deterministic installations:
-
-```
-package.pkg (ZIP file created by cimipkg)
-├── payload/                   # Files and directories to be copied to target
-│   └── example.txt
-├── scripts/                   # Pre/Post-install scripts
-│   ├── preinstall.ps1         # Runs before files are installed
-│   └── postinstall.ps1        # Runs after files are installed
-└── build-info.yaml            # Package metadata
-```
-
 ### .nupkg Format (NuGet/Chocolatey)
 
 A `.nupkg` file is a ZIP archive following the NuGet package specification, commonly used by Chocolatey:
 
 ```
-package.nupkg (ZIP file following NuGet spec)
-├── [Content_Types].xml        # MIME type definitions
-├── package.nuspec             # Package metadata (XML)
-├── _rels/                     # Package relationships
+package.nupkg
+├── [Content_Types].xml
+├── package.nuspec
+├── _rels/
 │   └── .rels
-├── lib/                       # Library files (optional)
+├── payload/
+│   └── example.txt
+├── lib/
 │   └── net45/
 │       └── application.exe
-└── tools/                     # Installation scripts
-    ├── chocolateyInstall.ps1      # Main install script
-    ├── chocolateyBeforeInstall.ps1 # Pre-install hook
-    └── chocolateyUninstall.ps1    # Uninstall script
+└── tools/
+    ├── chocolateyInstall.ps1
+    ├── chocolateyBeforeInstall.ps1
+    └── chocolateyUninstall.ps1
+```
+
+### .pkg Format (cimipkg)
+
+A `.pkg` file is a ZIP archive created by [cimipkg](https://github.com/windowsadmins/cimian-pkg) with a specific structure designed for simple, deterministic installations:
+
+```
+package.pkg
+├── payload/
+│   └── example.txt
+├── scripts/
+│   ├── preinstall.ps1
+│   └── postinstall.ps1
+└── build-info.yaml
 ```
 
 ### Chocolatey Package Support
@@ -80,10 +82,7 @@ package.nupkg (ZIP file following NuGet spec)
 
 **Example:**
 ```powershell
-# Install Chocolatey packages directly - no Chocolatey installation needed
 installer.exe osquery.5.19.0.nupkg
-
-# Result: Files installed, PATH updated, services configured automatically
 ```
 
 **What's NOT Supported:**
@@ -105,7 +104,7 @@ A bridge between `.pkg` and `.nupkg` formats for deployment scenarios.
 
 1. **Extract** the package (ZIP archive - either `.pkg` from cimipkg or `.nupkg` from NuGet/Chocolatey) to a temporary directory
 2. **Run pre-install script** (`scripts/preinstall.ps1` for .pkg or `tools/chocolateyBeforeInstall.ps1` for .nupkg)
-3. **Mirror payload** from `payload/` directory (.pkg) or extract files from appropriate locations (.nupkg)
+3. **Mirror payload** from `payload/` directory (supported in both .pkg and .nupkg formats)
 4. **Run post-install script** (`scripts/postinstall.ps1` for .pkg or `tools/chocolateyInstall.ps1` for .nupkg)
 5. **Clean up** temporary extraction directory
 
@@ -120,10 +119,7 @@ installer --pkg C:\packages\myapp.pkg --target C:\Program Files
 
 ### Package Information
 ```bash
-# Display package metadata
 installer --pkginfo --pkg package.pkg
-
-# Query specific information
 installer --query RestartAction --pkg package.pkg
 installer --query name --pkg package.pkg
 installer --query version --pkg package.pkg
@@ -131,22 +127,14 @@ installer --query version --pkg package.pkg
 
 ### System Information
 ```bash
-# Show available installation domains
 installer --dominfo
-
-# Show available volumes
 installer --volinfo
-
-# Show version
 installer --vers
 ```
 
 ### Verbose Output
 ```bash
-# Detailed logging
 installer --pkg package.pkg --target / --verbose
-
-# Dump logs to stderr
 installer --pkg package.pkg --target / --dumplog
 ```
 
@@ -180,30 +168,39 @@ The `--target` parameter supports multiple formats:
 - `C` → `C:\` (drive letter)
 - Any absolute path → Used directly
 
-## Package Creation
+## Package Creation with cimipkg
 
-Packages are created using [cimipkg](https://github.com/windowsadmins/cimian-pkg). The folder structure is:
+Packages are created using [cimipkg](https://github.com/windowsadmins/cimian-pkg), a companion tool for building both `.pkg` and `.nupkg` packages:
+
+```bash
+cimipkg <project_directory>
+cimipkg --nupkg <project_directory>
+```
+
+### Project Structure
 
 ```
 project/
-├── payload/                   # Files/folders to be written to disk
+├── payload/
 │   └── example.txt
-├── scripts/                   # Pre-/Post-install scripts  
-│   ├── preinstall.ps1         # Runs before files are installed
-│   └── postinstall.ps1        # Runs after files are installed
-└── build-info.yaml            # Metadata for package generation
+├── scripts/
+│   ├── preinstall.ps1
+│   └── postinstall.ps1
+└── build-info.yaml
 ```
 
-### Sample build-info.yaml
+### Example build-info.yaml
+
 ```yaml
-name: "MyApplication"
-version: "1.0.0"
-description: "A sample application package"
-author: "Your Name"
-license: "MIT"
-target: "/"
-restart_action: "None"
-dependencies: []
+product:
+  name: MyApplication
+  version: 1.0.0
+  identifier: com.company.myapplication
+  developer: ACME Corp
+  description: A sample application package
+install_location: C:\Program Files\MyApplication
+postinstall_action: none
+signing_certificate:
 ```
 
 ## Security & Elevation
@@ -234,14 +231,11 @@ dependencies: []
 
 **MSI Installer (Recommended)**
 ```bash
-# Download from GitHub releases and run:
 msiexec /i sbin-installer.msi /quiet
-# Installs to C:\Program Files\sbin\ and adds to PATH
 ```
 
 **Portable Executable**
 ```bash
-# Download installer.exe, place anywhere, no installation required
 installer --pkg package.pkg --target /
 ```
 
@@ -255,40 +249,26 @@ installer --pkg package.pkg --target /
 
 ### Development Build
 ```bash
-# Basic build (includes executable + MSI with timestamp version)
 .\build.ps1
-
-# Clean build with tests
 .\build.ps1 -Clean -Test
-
-# Executable only (skip MSI)
 .\build.ps1 -SkipMsi
-
-# Custom version (default is timestamp: YYYY.MM.DD.HHMM)
 .\build.ps1 -Version "2025.09.18.1200"
-
-# Architecture-specific build (auto-detected)
 .\build.ps1 -Configuration Release
 ```
 
 ### Code Signing & Enterprise
 ```bash
-# Certificate management
-.\build.ps1 -ListCerts                                 # List available certificates
-.\build.ps1 -FindCertSubject "Your Company"           # Find by subject
-
-# Build with signing (auto-detects best certificate)
-.\build.ps1                                            # Auto-detects and uses certificate
-.\build.ps1 -CertificateThumbprint "THUMBPRINT"       # Use specific certificate
-
-# Enterprise installation
-.\build.ps1 -Install                                   # Build, auto-sign, install
+.\build.ps1 -ListCerts
+.\build.ps1 -FindCertSubject "Your Company"
+.\build.ps1
+.\build.ps1 -CertificateThumbprint "THUMBPRINT"
+.\build.ps1 -Install
 ```
 
 ### System Installation
 ```bash
-.\build.ps1 -Install                    # Install to C:\Program Files\sbin\
-.\install.ps1 -Force                    # Force overwrite existing
+.\build.ps1 -Install
+.\install.ps1 -Force
 ```
 
 **Features:**
@@ -300,19 +280,9 @@ installer --pkg package.pkg --target /
 
 ### Advanced Build Options
 ```bash
-# Manual .NET build
 dotnet publish src/installer/installer.csproj --configuration Release --runtime win-x64 --self-contained -o dist
-
-# Skip MSI build (executable only)
 .\build.ps1 -SkipMsi
-
-# Custom timestamp version (format: YYYY.MM.DD.HHMM)
 .\build.ps1 -Version "2025.12.25.1430"
-
-# If WiX tool permission issues occur, try:
-# 1. Run PowerShell as Administrator  
-# 2. Or reinstall: dotnet tool uninstall --global wix; dotnet tool install --global wix
-# 3. Or skip MSI: .\build.ps1 -SkipMsi
 ```
 
 **Note**: MSI packaging is included by default but may require elevated permissions on some systems. Use `-SkipMsi` for environments with restricted permissions. Version format follows `YYYY.MM.DD.HHMM` timestamp convention.
