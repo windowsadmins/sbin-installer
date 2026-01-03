@@ -1,6 +1,6 @@
 # sbin-installer
 
-A lightweight, deterministic `.pkg` installer for Windows, inspired by the elegant simplicity of macOS package installation `/usr/sbin/installer` - this tool provides a simple, Chocolatey-free alternative for installing packages with a clean command-line interface.
+A lightweight, deterministic `.nupkg` or [cimipkg](https://github.com/windowsadmins/cimian-pkg) `.pkg` installer for Windows, inspired by the elegant simplicity of macOS package installation `/usr/sbin/installer` - this tool provides a simple, Chocolatey-free alternative for installing packages with a clean command-line interface.
 
 This tool follows the Unix philosophy: **Do one thing and do it well.** 
 
