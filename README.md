@@ -31,10 +31,12 @@ A minimal, focused installer that:
 
 ## How It Works
 
-A `.pkg` file is simply a ZIP archive with a specific structure:
+### .pkg Format (cimipkg)
+
+A `.pkg` file is a ZIP archive created by [cimipkg](https://github.com/windowsadmins/cimian-pkg) with a specific structure designed for simple, deterministic installations:
 
 ```
-package.pkg (ZIP file)
+package.pkg (ZIP file created by cimipkg)
 ├── payload/                   # Files and directories to be copied to target
 │   └── example.txt
 ├── scripts/                   # Pre/Post-install scripts
@@ -43,19 +45,38 @@ package.pkg (ZIP file)
 └── build-info.yaml            # Package metadata
 ```
 
+### .nupkg Format (NuGet/Chocolatey)
+
+A `.nupkg` file is a ZIP archive following the NuGet package specification, commonly used by Chocolatey:
+
+```
+package.nupkg (ZIP file following NuGet spec)
+├── [Content_Types].xml        # MIME type definitions
+├── package.nuspec             # Package metadata (XML)
+├── _rels/                     # Package relationships
+│   └── .rels
+├── lib/                       # Library files (optional)
+│   └── net45/
+│       └── application.exe
+└── tools/                     # Installation scripts
+    ├── chocolateyInstall.ps1      # Main install script
+    ├── chocolateyBeforeInstall.ps1 # Pre-install hook
+    └── chocolateyUninstall.ps1    # Uninstall script
+```
+
 ### Chocolatey Package Support
 
 `sbin-installer` also supports `.nupkg` (NuGet/Chocolatey) packages with automatic compatibility shims:
 
 **What's Supported:**
-- ✅ All NuGet schema versions (2010/07, 2011/08, 2012/06, 2013/01, etc.)
-- ✅ Common Chocolatey helper functions automatically shimmed:
+- All NuGet schema versions (2010/07, 2011/08, 2012/06, 2013/01, etc.)
+- Common Chocolatey helper functions automatically shimmed:
   - `Install-ChocolateyPath`, `Install-ChocolateyEnvironmentVariable`
   - `Install-ChocolateyPackage`, `Install-ChocolateyZipPackage`
   - `Get-ChocolateyWebFile`, `Get-ChocolateyUnzip`, `Install-ChocolateyShortcut`
   - Plus utility functions for architecture detection and environment management
-- ✅ Automatic detection of `tools/chocolatey*.ps1` scripts with helper injection
-- ✅ Tested with real packages (osquery 5.19.0, and more)
+- Automatic detection of `tools/chocolatey*.ps1` scripts with helper injection
+- Tested with real packages (osquery 5.19.0, and more)
 
 **Example:**
 ```powershell
@@ -73,19 +94,19 @@ installer.exe osquery.5.19.0.nupkg
 - All ~50+ Chocolatey helpers (only common ones)
 
 **When to Use:**
-- ✅ Deploying via Intune, SCCM, or scripts with local/network `.nupkg` files
-- ✅ Need lightweight, deterministic installation without Chocolatey overhead
-- ✅ Want macOS-style `/usr/sbin/installer` behavior on Windows
-- ❌ Need full package management with dependencies and updates → Use Chocolatey
+- **Yes:** Deploying via Intune, SCCM, or scripts with local/network `.nupkg` files
+- **Yes:** Need lightweight, deterministic installation without Chocolatey overhead
+- **Yes:** Want macOS-style `/usr/sbin/installer` behavior on Windows
+- **No:** Need full package management with dependencies and updates → Use Chocolatey
 
 A bridge between `.pkg` and `.nupkg` formats for deployment scenarios.
 
 ### Installation Process
 
-1. **Extract** the `.pkg` (really a zip) to a temporary directory
-2. **Run pre-install script** (`scripts/preinstall.ps1` or `tools/chocolateyBeforeInstall.ps1`)
-3. **Mirror payload** from `payload/` directory to target location
-4. **Run post-install script** (`scripts/postinstall.ps1` or `tools/chocolateyInstall.ps1`)
+1. **Extract** the package (ZIP archive - either `.pkg` from cimipkg or `.nupkg` from NuGet/Chocolatey) to a temporary directory
+2. **Run pre-install script** (`scripts/preinstall.ps1` for .pkg or `tools/chocolateyBeforeInstall.ps1` for .nupkg)
+3. **Mirror payload** from `payload/` directory (.pkg) or extract files from appropriate locations (.nupkg)
+4. **Run post-install script** (`scripts/postinstall.ps1` for .pkg or `tools/chocolateyInstall.ps1` for .nupkg)
 5. **Clean up** temporary extraction directory
 
 ## Usage
@@ -200,8 +221,8 @@ dependencies: []
 | Source repositories | Required | Direct file path |
 | Package format | `.nupkg` | `.pkg` (ZIP) + `.nupkg` support |
 | Dependency resolution | Full tree | Simple list |
-| Script support | tools\chocolatey*.ps1 | ✅ Supported via shim + scripts/*.ps1 |
-| Chocolatey helpers | Native | ✅ Common helpers shimmed |
+| Script support | tools\chocolatey*.ps1 | Yes (Supported via shim + scripts/*.ps1) |
+| Chocolatey helpers | Native | Yes (Common helpers shimmed) |
 | Performance | Slow | Fast |
 | Complexity | High | Minimal |
 | Package database | Yes | No |
