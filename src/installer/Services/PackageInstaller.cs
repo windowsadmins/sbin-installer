@@ -65,13 +65,9 @@ public class PackageInstaller
         try
         {
             // Load XML and strip namespaces to support all NuGet schema versions
-            var xmlDoc = new System.Xml.Linq.XDocument();
-            using (var fileStream = File.OpenRead(nuspecPath))
-            {
-                xmlDoc = System.Xml.Linq.XDocument.Load(fileStream);
-            }
+            var xmlDoc = System.Xml.Linq.XDocument.Load(nuspecPath);
             
-            // Remove all namespace declarations
+            // Remove all namespace declarations and attributes
             foreach (var element in xmlDoc.Descendants())
             {
                 element.Name = element.Name.LocalName;
@@ -79,10 +75,15 @@ public class PackageInstaller
                     .Where(a => !a.IsNamespaceDeclaration));
             }
             
-            // Now deserialize the namespace-free XML
+            // Serialize the namespace-free XML to a string, then deserialize it
+            // This ensures the XmlSerializer gets a clean document without any namespace artifacts
             var serializer = new XmlSerializer(typeof(NuspecPackage));
-            using var reader = xmlDoc.CreateReader();
-            var nuspec = (NuspecPackage?)serializer.Deserialize(reader);
+            using var stringWriter = new StringWriter();
+            xmlDoc.Save(stringWriter);
+            var cleanXml = stringWriter.ToString();
+            
+            using var stringReader = new StringReader(cleanXml);
+            var nuspec = (NuspecPackage?)serializer.Deserialize(stringReader);
             return Task.FromResult(nuspec);
         }
         catch (Exception ex)
