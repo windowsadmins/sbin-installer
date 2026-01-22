@@ -448,6 +448,60 @@ public class PackageInstaller
                normalizedPath == "C:\\";
     }
 
+    /// <summary>
+    /// Get the best available PowerShell executable.
+    /// Prefers pwsh.exe (PowerShell 7+) over powershell.exe (Windows PowerShell 5.1)
+    /// to support scripts with #requires -Version 7.0
+    /// </summary>
+    private static string GetPowerShellExecutable()
+    {
+        // Check if pwsh (PowerShell 7+) is available
+        var pwshPaths = new[]
+        {
+            // Standard install locations
+            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "PowerShell", "7", "pwsh.exe"),
+            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "PowerShell", "7-preview", "pwsh.exe"),
+            // Check PATH
+            "pwsh.exe"
+        };
+
+        foreach (var pwshPath in pwshPaths)
+        {
+            if (pwshPath == "pwsh.exe")
+            {
+                // Check if pwsh is in PATH
+                try
+                {
+                    var startInfo = new ProcessStartInfo
+                    {
+                        FileName = "where.exe",
+                        Arguments = "pwsh.exe",
+                        UseShellExecute = false,
+                        RedirectStandardOutput = true,
+                        CreateNoWindow = true
+                    };
+                    using var process = Process.Start(startInfo);
+                    process?.WaitForExit(1000);
+                    if (process?.ExitCode == 0)
+                    {
+                        return "pwsh.exe";
+                    }
+                }
+                catch
+                {
+                    // Ignore errors, fall through to next option
+                }
+            }
+            else if (File.Exists(pwshPath))
+            {
+                return pwshPath;
+            }
+        }
+
+        // Fall back to Windows PowerShell 5.1
+        return "powershell.exe";
+    }
+
     private static string ResolveTargetDirectory(string target)
     {
         // Target parameter works like macOS installer - it's just the root volume/drive
@@ -546,6 +600,11 @@ public class PackageInstaller
         // Check if this is a Chocolatey script (in tools/ directory)
         var isChocolateyScript = scriptPath.Contains($"{Path.DirectorySeparatorChar}tools{Path.DirectorySeparatorChar}");
         
+        // Determine which PowerShell to use - prefer pwsh (PS7) over powershell.exe (PS5.1)
+        // This ensures scripts with #requires -Version 7.0 work correctly
+        var powershellExe = GetPowerShellExecutable();
+        _logger.LogDebug("Using PowerShell: {PowerShell}", powershellExe);
+        
         // Prepare the command - for Chocolatey scripts, inject helper shim
         string arguments;
         if (isChocolateyScript)
@@ -566,7 +625,7 @@ public class PackageInstaller
         
         var startInfo = new ProcessStartInfo
         {
-            FileName = "powershell.exe",
+            FileName = powershellExe,
             Arguments = arguments,
             WorkingDirectory = workingDirectory,
             UseShellExecute = false,
