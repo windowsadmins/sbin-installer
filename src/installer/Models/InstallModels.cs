@@ -41,6 +41,11 @@ public class InstallOptions
     public string? Language { get; set; }
     public bool ListIso { get; set; }
     public bool ShowChoicesXml { get; set; }
+    /// <summary>
+    /// Custom temporary directory for package extraction.
+    /// Use a shorter path (e.g., C:\PkgTemp) to avoid MAX_PATH issues with deeply nested files.
+    /// </summary>
+    public string? TempDir { get; set; }
 }
 
 /// <summary>

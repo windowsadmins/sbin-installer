@@ -105,6 +105,11 @@ class Program
             aliases: new[] { "--config", "-config" },
             description: "Display command line parameters");
 
+        // Path options
+        var tempDirOption = new Option<string?>(
+            aliases: new[] { "--temp-dir", "-tempdir" },
+            description: "Custom temporary directory for package extraction (use a shorter path like C:\\PkgTemp to avoid MAX_PATH issues)");
+
         // Add positional argument first
         rootCommand.AddArgument(packageArgument);
 
@@ -122,6 +127,7 @@ class Program
         rootCommand.AddOption(allowUntrustedOption);
         rootCommand.AddOption(versionOption);
         rootCommand.AddOption(configOption);
+        rootCommand.AddOption(tempDirOption);
 
         // Set up command handler
         rootCommand.SetHandler(async (options) =>
@@ -139,7 +145,7 @@ class Program
         new InstallOptionsBinder(
             packageArgument, pkgOption, targetOption, pkgInfoOption, domInfoOption, volInfoOption,
             queryOption, verboseOption, verboseROption, dumpLogOption, plistOption,
-            allowUntrustedOption, versionOption, configOption));
+            allowUntrustedOption, versionOption, configOption, tempDirOption));
 
         return await rootCommand.InvokeAsync(args);
     }
@@ -464,13 +470,14 @@ public class InstallOptionsBinder : BinderBase<InstallOptions>
     private readonly Option<bool> _allowUntrustedOption;
     private readonly Option<bool> _versionOption;
     private readonly Option<bool> _configOption;
+    private readonly Option<string?> _tempDirOption;
 
     public InstallOptionsBinder(
         Argument<string?> packageArgument, Option<string> pkgOption, Option<string> targetOption, Option<bool> pkgInfoOption,
         Option<bool> domInfoOption, Option<bool> volInfoOption, Option<string?> queryOption,
         Option<bool> verboseOption, Option<bool> verboseROption, Option<bool> dumpLogOption,
         Option<bool> plistOption, Option<bool> allowUntrustedOption, Option<bool> versionOption,
-        Option<bool> configOption)
+        Option<bool> configOption, Option<string?> tempDirOption)
     {
         _packageArgument = packageArgument;
         _pkgOption = pkgOption;
@@ -486,6 +493,7 @@ public class InstallOptionsBinder : BinderBase<InstallOptions>
         _allowUntrustedOption = allowUntrustedOption;
         _versionOption = versionOption;
         _configOption = configOption;
+        _tempDirOption = tempDirOption;
     }
 
     protected override InstallOptions GetBoundValue(BindingContext bindingContext)
@@ -509,7 +517,8 @@ public class InstallOptionsBinder : BinderBase<InstallOptions>
             PlistFormat = bindingContext.ParseResult.GetValueForOption(_plistOption),
             AllowUntrusted = bindingContext.ParseResult.GetValueForOption(_allowUntrustedOption),
             ShowVersion = bindingContext.ParseResult.GetValueForOption(_versionOption),
-            ShowConfig = bindingContext.ParseResult.GetValueForOption(_configOption)
+            ShowConfig = bindingContext.ParseResult.GetValueForOption(_configOption),
+            TempDir = bindingContext.ParseResult.GetValueForOption(_tempDirOption)
         };
     }
 }

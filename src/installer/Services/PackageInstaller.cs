@@ -96,13 +96,49 @@ public class PackageInstaller
     /// <summary>
     /// Extract and analyze package information without installing
     /// </summary>
-    public async Task<PackageInfo> GetPackageInfoAsync(string packagePath)
+    public Task<PackageInfo> GetPackageInfoAsync(string packagePath) => GetPackageInfoAsync(packagePath, null);
+
+    /// <summary>
+    /// Extract and analyze package information without installing
+    /// </summary>
+    /// <param name="packagePath">Path to the package file</param>
+    /// <param name="customTempDir">Optional custom temp directory (use shorter path like C:\PkgTemp to avoid MAX_PATH issues)</param>
+    public async Task<PackageInfo> GetPackageInfoAsync(string packagePath, string? customTempDir)
     {
         if (!File.Exists(packagePath))
             throw new FileNotFoundException($"Package file not found: {packagePath}");
 
         var packageType = DetectPackageType(packagePath);
-        var tempDir = Path.Combine(Path.GetTempPath(), $"pkg_extract_{Guid.NewGuid():N}");
+        
+        // Use custom temp directory if provided, otherwise use system temp
+        // Custom temp dir helps avoid MAX_PATH (260 char) issues with deeply nested files
+        string baseTempPath;
+        if (!string.IsNullOrWhiteSpace(customTempDir))
+        {
+            // Create the custom temp directory if it doesn't exist
+            if (!Directory.Exists(customTempDir))
+            {
+                try
+                {
+                    Directory.CreateDirectory(customTempDir);
+                    _logger.LogDebug("Created custom temp directory: {TempDir}", customTempDir);
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogWarning("Failed to create custom temp directory {TempDir}, falling back to system temp: {Error}", 
+                        customTempDir, ex.Message);
+                    customTempDir = null;
+                }
+            }
+            baseTempPath = customTempDir ?? Path.GetTempPath();
+        }
+        else
+        {
+            baseTempPath = Path.GetTempPath();
+        }
+        
+        // Use shorter prefix 'p_' instead of 'pkg_extract_' to save characters
+        var tempDir = Path.Combine(baseTempPath, $"p_{Guid.NewGuid():N}");
         
         try
         {
@@ -221,8 +257,14 @@ public class PackageInstaller
 
         try
         {
-            // Get package information first
-            var packageInfo = await GetPackageInfoAsync(options.PackagePath);
+            // Log custom temp directory if specified
+            if (!string.IsNullOrWhiteSpace(options.TempDir))
+            {
+                logs.Add($"Using custom temp directory: {options.TempDir}");
+            }
+            
+            // Get package information first (pass custom temp dir to avoid MAX_PATH issues)
+            var packageInfo = await GetPackageInfoAsync(options.PackagePath, options.TempDir);
             
             // Determine if elevation will likely be needed
             var packageInstallLocation = packageInfo.GetInstallLocation();
