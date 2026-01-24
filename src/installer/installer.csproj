@@ -22,6 +22,8 @@
     <Product>sbin-installer</Product>
     <Description>A lightweight .pkg installer for Windows, inspired by macOS /usr/sbin/installer</Description>
     <Copyright>Copyright © 2025</Copyright>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <LongPathAware>true</LongPathAware>
   </PropertyGroup>
 
   <ItemGroup>
