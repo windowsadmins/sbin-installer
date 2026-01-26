@@ -662,14 +662,79 @@ public class PackageInstaller
         }
         else
         {
-            arguments = $"-ExecutionPolicy Bypass -File \"{scriptPath}\"";
+            // For .pkg scripts, inject payloadRoot variable at the top of the script
+            // This ensures scripts work even if they forget to set it
+            var payloadDir = Path.Combine(workingDirectory, "payload");
+            var scriptWrapper = Path.Combine(Path.GetTempPath(), $"sbin-wrapper-{Guid.NewGuid():N}.ps1");
+            
+            try
+            {
+                // Read original script
+                var scriptContent = await File.ReadAllTextAsync(scriptPath);
+                
+                // Inject payloadRoot at the beginning (after any #Requires statements)
+                var lines = scriptContent.Split(new[] { "\r\n", "\r", "\n" }, StringSplitOptions.None);
+                var injectionIndex = 0;
+                
+                // Skip past #Requires and [CmdletBinding()] declarations
+                while (injectionIndex < lines.Length)
+                {
+                    var trimmed = lines[injectionIndex].TrimStart();
+                    if (trimmed.StartsWith("#Requires", StringComparison.OrdinalIgnoreCase) ||
+                        trimmed.StartsWith("[CmdletBinding(", StringComparison.OrdinalIgnoreCase) ||
+                        trimmed.StartsWith("param(", StringComparison.OrdinalIgnoreCase) ||
+                        string.IsNullOrWhiteSpace(trimmed))
+                    {
+                        injectionIndex++;
+                    }
+                    else
+                    {
+                        break;
+                    }
+                }
+                
+                // Insert payloadRoot assignment
+                var injection = new[]
+                {
+                    "# Auto-injected by sbin-installer: Set payloadRoot from environment",
+                    "$payloadRoot = $env:payloadRoot",
+                    ""
+                };
+                
+                var newLines = lines.Take(injectionIndex)
+                    .Concat(injection)
+                    .Concat(lines.Skip(injectionIndex))
+                    .ToArray();
+                
+                await File.WriteAllTextAsync(scriptWrapper, string.Join(Environment.NewLine, newLines));
+                
+                arguments = $"-ExecutionPolicy Bypass -File \"{scriptWrapper}\"";
+                _logger.LogDebug("Running .pkg script with injected payloadRoot: {ScriptPath}", scriptPath);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Failed to inject payloadRoot, falling back to direct execution");
+                arguments = $"-ExecutionPolicy Bypass -File \"{scriptPath}\"";
+            }
+        }
+        
+        // For .pkg scripts, set working directory to payload so scripts can use relative paths
+        var scriptWorkingDir = workingDirectory;
+        if (!isChocolateyScript)
+        {
+            var payloadDir = Path.Combine(workingDirectory, "payload");
+            if (Directory.Exists(payloadDir))
+            {
+                scriptWorkingDir = payloadDir;
+                _logger.LogDebug("Setting script working directory to payload: {PayloadDir}", payloadDir);
+            }
         }
         
         var startInfo = new ProcessStartInfo
         {
             FileName = powershellExe,
             Arguments = arguments,
-            WorkingDirectory = workingDirectory,
+            WorkingDirectory = scriptWorkingDir,
             UseShellExecute = false,
             RedirectStandardOutput = true,
             RedirectStandardError = true,
