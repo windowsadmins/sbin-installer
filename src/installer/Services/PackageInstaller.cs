@@ -145,13 +145,63 @@ public class PackageInstaller
             _logger.LogDebug("Extracting {PackageType} package to temporary directory: {TempDir}", packageType, tempDir);
             Directory.CreateDirectory(tempDir);
 
-            // Validate package integrity before extraction
+            // Validate package integrity before extraction and check for potential path length issues
             try
             {
                 using (var archive = ZipFile.OpenRead(packagePath))
                 {
                     // Successfully opened - package structure is valid
                     _logger.LogDebug("Package validation passed: {EntryCount} entries found", archive.Entries.Count);
+                    
+                    // Check for potential MAX_PATH (260 char) issues before extraction
+                    // Warning threshold is 200 chars to leave room for the extraction path prefix
+                    const int PathWarningThreshold = 200;
+                    const int MaxPathLimit = 260;
+                    
+                    var longPathEntries = archive.Entries
+                        .Where(e => !string.IsNullOrEmpty(e.FullName))
+                        .Select(e => new { Entry = e, FullPath = Path.Combine(tempDir, e.FullName) })
+                        .Where(x => x.FullPath.Length > PathWarningThreshold)
+                        .OrderByDescending(x => x.FullPath.Length)
+                        .Take(5)
+                        .ToList();
+                    
+                    if (longPathEntries.Any())
+                    {
+                        var longestPath = longPathEntries.First().FullPath;
+                        var longestLength = longestPath.Length;
+                        
+                        if (longestLength >= MaxPathLimit)
+                        {
+                            _logger.LogError(
+                                "Package contains files that will exceed Windows MAX_PATH ({MaxPath} chars) limit! " +
+                                "Longest path: {PathLength} chars. " +
+                                "Consider using --temp-dir with a shorter path like C:\\Temp, or enable LongPathsEnabled in Windows. " +
+                                "Example: --temp-dir C:\\Temp",
+                                MaxPathLimit, longestLength);
+                            
+                            _logger.LogError("Problematic paths:");
+                            foreach (var entry in longPathEntries)
+                            {
+                                _logger.LogError("  [{Length} chars] {Path}", entry.FullPath.Length, entry.Entry.FullName);
+                            }
+                        }
+                        else
+                        {
+                            _logger.LogWarning(
+                                "Package contains files approaching Windows MAX_PATH ({MaxPath} chars) limit. " +
+                                "Longest extraction path will be {PathLength} chars. " +
+                                "If installation fails, use --temp-dir with a shorter path like C:\\Temp. " +
+                                "Example: --temp-dir C:\\Temp",
+                                MaxPathLimit, longestLength);
+                            
+                            _logger.LogDebug("Files with long paths:");
+                            foreach (var entry in longPathEntries)
+                            {
+                                _logger.LogDebug("  [{Length} chars] {Path}", entry.FullPath.Length, entry.Entry.FullName);
+                            }
+                        }
+                    }
                 }
             }
             catch (InvalidDataException ex) when (ex.Message.Contains("End of Central Directory"))
