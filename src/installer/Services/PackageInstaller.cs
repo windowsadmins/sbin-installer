@@ -1,4 +1,5 @@
 using Microsoft.Extensions.Logging;
+using Microsoft.Win32;
 using SbinInstaller.Models;
 using System.Diagnostics;
 using System.IO.Compression;
@@ -154,51 +155,59 @@ public class PackageInstaller
                     _logger.LogDebug("Package validation passed: {EntryCount} entries found", archive.Entries.Count);
                     
                     // Check for potential MAX_PATH (260 char) issues before extraction
-                    // Warning threshold is 200 chars to leave room for the extraction path prefix
-                    const int PathWarningThreshold = 200;
-                    const int MaxPathLimit = 260;
-                    
-                    var longPathEntries = archive.Entries
-                        .Where(e => !string.IsNullOrEmpty(e.FullName))
-                        .Select(e => new { Entry = e, FullPath = Path.Combine(tempDir, e.FullName) })
-                        .Where(x => x.FullPath.Length > PathWarningThreshold)
-                        .OrderByDescending(x => x.FullPath.Length)
-                        .Take(5)
-                        .ToList();
-                    
-                    if (longPathEntries.Any())
+                    // Skip if Windows LongPathsEnabled is active (app manifest already declares longPathAware)
+                    var longPathEnabled = OperatingSystem.IsWindows() && IsLongPathEnabled();
+                    if (longPathEnabled)
                     {
-                        var longestPath = longPathEntries.First().FullPath;
-                        var longestLength = longestPath.Length;
+                        _logger.LogDebug("Windows LongPathsEnabled is active - skipping MAX_PATH checks");
+                    }
+                    else
+                    {
+                        const int PathWarningThreshold = 200;
+                        const int MaxPathLimit = 260;
                         
-                        if (longestLength >= MaxPathLimit)
+                        var longPathEntries = archive.Entries
+                            .Where(e => !string.IsNullOrEmpty(e.FullName))
+                            .Select(e => new { Entry = e, FullPath = Path.Combine(tempDir, e.FullName) })
+                            .Where(x => x.FullPath.Length > PathWarningThreshold)
+                            .OrderByDescending(x => x.FullPath.Length)
+                            .Take(5)
+                            .ToList();
+                        
+                        if (longPathEntries.Any())
                         {
-                            _logger.LogError(
-                                "Package contains files that will exceed Windows MAX_PATH ({MaxPath} chars) limit! " +
-                                "Longest path: {PathLength} chars. " +
-                                "Consider using --temp-dir with a shorter path like C:\\Temp, or enable LongPathsEnabled in Windows. " +
-                                "Example: --temp-dir C:\\Temp",
-                                MaxPathLimit, longestLength);
+                            var longestPath = longPathEntries.First().FullPath;
+                            var longestLength = longestPath.Length;
                             
-                            _logger.LogError("Problematic paths:");
-                            foreach (var entry in longPathEntries)
+                            if (longestLength >= MaxPathLimit)
                             {
-                                _logger.LogError("  [{Length} chars] {Path}", entry.FullPath.Length, entry.Entry.FullName);
+                                _logger.LogError(
+                                    "Package contains files that will exceed Windows MAX_PATH ({MaxPath} chars) limit! " +
+                                    "Longest path: {PathLength} chars. " +
+                                    "Consider using --temp-dir with a shorter path like C:\\Temp, or enable LongPathsEnabled in Windows. " +
+                                    "Example: --temp-dir C:\\Temp",
+                                    MaxPathLimit, longestLength);
+                                
+                                _logger.LogError("Problematic paths:");
+                                foreach (var entry in longPathEntries)
+                                {
+                                    _logger.LogError("  [{Length} chars] {Path}", entry.FullPath.Length, entry.Entry.FullName);
+                                }
                             }
-                        }
-                        else
-                        {
-                            _logger.LogWarning(
-                                "Package contains files approaching Windows MAX_PATH ({MaxPath} chars) limit. " +
-                                "Longest extraction path will be {PathLength} chars. " +
-                                "If installation fails, use --temp-dir with a shorter path like C:\\Temp. " +
-                                "Example: --temp-dir C:\\Temp",
-                                MaxPathLimit, longestLength);
-                            
-                            _logger.LogDebug("Files with long paths:");
-                            foreach (var entry in longPathEntries)
+                            else
                             {
-                                _logger.LogDebug("  [{Length} chars] {Path}", entry.FullPath.Length, entry.Entry.FullName);
+                                _logger.LogWarning(
+                                    "Package contains files approaching Windows MAX_PATH ({MaxPath} chars) limit. " +
+                                    "Longest extraction path will be {PathLength} chars. " +
+                                    "If installation fails, use --temp-dir with a shorter path like C:\\Temp. " +
+                                    "Example: --temp-dir C:\\Temp",
+                                    MaxPathLimit, longestLength);
+                                
+                                _logger.LogDebug("Files with long paths:");
+                                foreach (var entry in longPathEntries)
+                                {
+                                    _logger.LogDebug("  [{Length} chars] {Path}", entry.FullPath.Length, entry.Entry.FullName);
+                                }
                             }
                         }
                     }
@@ -526,6 +535,25 @@ public class PackageInstaller
         using var identity = WindowsIdentity.GetCurrent();
         var principal = new WindowsPrincipal(identity);
         return principal.IsInRole(WindowsBuiltInRole.Administrator);
+    }
+
+    /// <summary>
+    /// Check if Windows LongPathsEnabled registry key is set.
+    /// When enabled (and app manifest declares longPathAware), paths beyond 260 chars are supported.
+    /// </summary>
+    [System.Runtime.Versioning.SupportedOSPlatform("windows")]
+    private static bool IsLongPathEnabled()
+    {
+        try
+        {
+            using var key = Registry.LocalMachine.OpenSubKey(@"SYSTEM\CurrentControlSet\Control\FileSystem");
+            var value = key?.GetValue("LongPathsEnabled");
+            return value is int intVal && intVal == 1;
+        }
+        catch
+        {
+            return false;
+        }
     }
 
     private static bool RequiresElevation(string path)
