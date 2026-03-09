@@ -445,6 +445,20 @@ public class PackageInstaller
                     ? installLocation 
                     : Path.Combine(targetRoot, installLocation.TrimStart('\\', '/'));
 
+                // Inventory pre-existing files so we can verify nothing was removed
+                var preExistingFiles = Directory.Exists(resolvedInstallPath)
+                    ? new HashSet<string>(Directory.GetFiles(resolvedInstallPath, "*", SearchOption.AllDirectories), StringComparer.OrdinalIgnoreCase)
+                    : new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+                if (preExistingFiles.Count > 0)
+                {
+                    logs.Add($"Files: {preExistingFiles.Count} pre-existing file(s) in {resolvedInstallPath}");
+                    foreach (var existing in preExistingFiles)
+                    {
+                        _logger.LogDebug("Pre-existing file: {File}", existing);
+                    }
+                }
+
                 if (packageInfo.PackageType == PackageType.Nupkg)
                 {
                     logs.Add("Files: Installing .nupkg content files...");
@@ -458,9 +472,24 @@ public class PackageInstaller
                     if (Directory.Exists(payloadDir))
                     {
                         logs.Add("Files: Installing payload files...");
-                        MirrorDirectory(payloadDir, resolvedInstallPath);
+                        CopyPayloadToDirectory(payloadDir, resolvedInstallPath);
                         logs.Add($"Files: Installed {packageInfo.PayloadFiles.Count} files successfully");
                     }
+                }
+
+                // Verify pre-existing files were preserved (additive install only)
+                var missingFiles = preExistingFiles.Where(f => !File.Exists(f)).ToList();
+                if (missingFiles.Count > 0)
+                {
+                    foreach (var missing in missingFiles)
+                    {
+                        _logger.LogError("Pre-existing file was removed during install: {File}", missing);
+                    }
+                    logs.Add($"WARNING: {missingFiles.Count} pre-existing file(s) went missing during install!");
+                }
+                else if (preExistingFiles.Count > 0)
+                {
+                    logs.Add($"Files: All {preExistingFiles.Count} pre-existing file(s) preserved");
                 }
             }
             else
@@ -664,12 +693,15 @@ public class PackageInstaller
         await File.WriteAllTextAsync(targetPath, content, System.Text.Encoding.UTF8);
     }
 
-    private void MirrorDirectory(string sourceDir, string targetDir)
+    /// <summary>
+    /// Copy payload files into the target directory (additive only — never deletes existing files).
+    /// Multiple packages can share the same install_location safely.
+    /// </summary>
+    private void CopyPayloadToDirectory(string sourceDir, string targetDir)
     {
         if (!Directory.Exists(targetDir))
             Directory.CreateDirectory(targetDir);
 
-        // Copy all files
         foreach (var file in Directory.GetFiles(sourceDir, "*", SearchOption.AllDirectories))
         {
             var relativePath = Path.GetRelativePath(sourceDir, file);
@@ -796,17 +828,11 @@ public class PackageInstaller
             }
         }
         
-        // For .pkg scripts, set working directory to payload so scripts can use relative paths
+        // Keep working directory at the extracted root (not payload subdirectory).
+        // Scripts access payload via the injected $payloadRoot variable.
+        // Setting CWD inside a temp subdirectory causes Windows to hold a directory
+        // handle that prevents cleanup immediately after the process exits.
         var scriptWorkingDir = workingDirectory;
-        if (!isChocolateyScript)
-        {
-            var payloadDir = Path.Combine(workingDirectory, "payload");
-            if (Directory.Exists(payloadDir))
-            {
-                scriptWorkingDir = payloadDir;
-                _logger.LogDebug("Setting script working directory to payload: {PayloadDir}", payloadDir);
-            }
-        }
         
         var startInfo = new ProcessStartInfo
         {
