@@ -26,7 +26,13 @@
     
     <StandardDirectory Id="ProgramFiles64Folder">
       <Directory Id="INSTALLFOLDER" Name="sbin">
-        <Component Id="MainExecutable" Guid="A1B2C3D4-E5F6-7890-1234-567890ABCDEF">
+        <!--
+          Permanent="yes" ensures installer.exe and the PATH entry survive MSI uninstall.
+          The sbin directory is shared by multiple packages (manageusers.exe, startset.exe, etc.)
+          installed via .pkg files. Removing installer.exe on MSI uninstall/upgrade would break
+          the ability to install or update those packages.
+        -->
+        <Component Id="MainExecutable" Guid="A1B2C3D4-E5F6-7890-1234-567890ABCDEF" Permanent="yes">
           <File Id="InstallerExe" 
                 Source="$(var.BIN_DIR)\installer.exe" 
                 KeyPath="yes" />
