@@ -445,9 +445,18 @@ public class PackageInstaller
                     ? installLocation 
                     : Path.Combine(targetRoot, installLocation.TrimStart('\\', '/'));
 
-                // Inventory pre-existing files so we can verify nothing was removed
+                // Inventory pre-existing files so we can verify nothing was removed.
+                // Use EnumerationOptions to skip reparse points (NTFS junction points like
+                // "C:\Documents and Settings" and "C:\ProgramData\Application Data" that are
+                // access-protected OS compatibility stubs) and silently ignore inaccessible paths.
+                var _preExistingEnumOpts = new EnumerationOptions
+                {
+                    RecurseSubdirectories = true,
+                    IgnoreInaccessible = true,
+                    AttributesToSkip = FileAttributes.ReparsePoint | FileAttributes.System | FileAttributes.Hidden
+                };
                 var preExistingFiles = Directory.Exists(resolvedInstallPath)
-                    ? new HashSet<string>(Directory.GetFiles(resolvedInstallPath, "*", SearchOption.AllDirectories), StringComparer.OrdinalIgnoreCase)
+                    ? new HashSet<string>(Directory.GetFiles(resolvedInstallPath, "*", _preExistingEnumOpts), StringComparer.OrdinalIgnoreCase)
                     : new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
                 if (preExistingFiles.Count > 0)
@@ -549,7 +558,7 @@ public class PackageInstaller
         }
         catch (Exception ex)
         {
-            result.Message = $"Installation failed: {ex.Message}";
+            result.Message = ex.Message;
             result.ExitCode = 1;
             _logger.LogError(ex, "Installation failed");
         }
