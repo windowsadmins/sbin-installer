@@ -31,6 +31,7 @@
     <PackageReference Include="YamlDotNet" Version="16.2.0" />
     <PackageReference Include="Microsoft.Extensions.Logging" Version="10.0.0" />
     <PackageReference Include="Microsoft.Extensions.Logging.Console" Version="10.0.0" />
+    <PackageReference Include="WixToolset.Dtf.WindowsInstaller" Version="5.*" />
   </ItemGroup>
 
   <ItemGroup>
