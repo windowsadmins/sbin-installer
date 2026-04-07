@@ -15,7 +15,11 @@ public enum PackageType
     /// <summary>
     /// NuGet .nupkg format with .nuspec metadata
     /// </summary>
-    Nupkg
+    Nupkg,
+    /// <summary>
+    /// Windows Installer .msi format (native DTF installation)
+    /// </summary>
+    Msi
 }
 
 /// <summary>
