@@ -1,6 +1,7 @@
 using Microsoft.Extensions.Logging;
 using Microsoft.Win32;
 using SbinInstaller.Models;
+using SbinInstaller.Services;
 using System.Diagnostics;
 using System.IO.Compression;
 using System.Security.Principal;
@@ -37,6 +38,7 @@ public class PackageInstaller
         {
             ".nupkg" => PackageType.Nupkg,
             ".pkg" => PackageType.Pkg,
+            ".msi" => PackageType.Msi,
             _ => throw new NotSupportedException($"Unsupported package type: {extension}")
         };
     }
@@ -316,12 +318,19 @@ public class PackageInstaller
 
         try
         {
+            // MSI packages use native Windows Installer API — completely different flow
+            if (DetectPackageType(options.PackagePath) == PackageType.Msi)
+            {
+                var msiInstaller = new MsiInstaller(_logger);
+                return msiInstaller.Install(options.PackagePath, options);
+            }
+
             // Log custom temp directory if specified
             if (!string.IsNullOrWhiteSpace(options.TempDir))
             {
                 logs.Add($"Using custom temp directory: {options.TempDir}");
             }
-            
+
             // Get package information first (pass custom temp dir to avoid MAX_PATH issues)
             var packageInfo = await GetPackageInfoAsync(options.PackagePath, options.TempDir);
             
