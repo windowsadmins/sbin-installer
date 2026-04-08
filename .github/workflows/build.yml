@@ -6,9 +6,6 @@ on:
   pull_request:
     branches: [main]
 
-permissions:
-  contents: write
-
 env:
   DOTNET_VERSION: '10.0.x'
 
@@ -41,21 +38,25 @@ jobs:
             Write-Host "Publishing for $rid..."
             dotnet publish src/installer/installer.csproj `
               -c Release -r $rid --self-contained `
+              -o "publish/$rid" `
               -p:PublishSingleFile=true `
               -p:PublishTrimmed=true `
               -p:TrimMode=partial `
               -p:EnableCompressionInSingleFile=true `
-              -p:Version=$version
+              -p:Version=$version `
+              -p:AssemblyVersion=$version `
+              -p:FileVersion=$version `
+              -p:InformationalVersion=$version
 
             $arch = if ($rid -eq "win-x64") { "x64" } else { "arm64" }
             New-Item -ItemType Directory -Path "dist/$arch" -Force | Out-Null
-            Copy-Item "src/installer/bin/Release/net10.0/$rid/publish/installer.exe" "dist/$arch/installer.exe" -Force
+            Copy-Item "publish/$rid/installer.exe" "dist/$arch/installer.exe" -Force
             Write-Host "Built: dist/$arch/installer.exe"
           }
 
       - name: Test executable
         shell: pwsh
-        run: .\dist\x64\installer.exe --version
+        run: .\dist\x64\installer.exe --vers
 
       - name: Download cimipkg
         shell: pwsh
@@ -133,6 +134,8 @@ jobs:
     needs: build
     runs-on: ubuntu-latest
     if: github.ref == 'refs/heads/main'
+    permissions:
+      contents: write
 
     steps:
       - name: Download artifacts
