@@ -64,8 +64,27 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           New-Item -ItemType Directory -Path tools -Force | Out-Null
-          gh release download --repo windowsadmins/cimian-pkg --pattern "cimipkg-win-x64.zip" --dir tools
-          Expand-Archive -Path tools/cimipkg-win-x64.zip -DestinationPath tools -Force
+          # Try zip format first (new releases), fall back to bare exe (legacy)
+          $downloaded = $false
+          try {
+            gh release download --repo windowsadmins/cimian-pkg --pattern "cimipkg-win-x64.zip" --dir tools 2>$null
+            if (Test-Path tools/cimipkg-win-x64.zip) {
+              Expand-Archive -Path tools/cimipkg-win-x64.zip -DestinationPath tools -Force
+              if (Test-Path tools/cimipkg.exe) {
+                $downloaded = $true
+              } else {
+                Write-Warning "ZIP extracted but tools/cimipkg.exe not found, falling back to legacy download"
+              }
+            }
+          } catch {
+            Write-Warning "ZIP download/extraction failed: $($_.Exception.Message), falling back to legacy download"
+          }
+          if (-not $downloaded) {
+            gh release download --repo windowsadmins/cimian-pkg --pattern "cimipkg.exe" --dir tools
+          }
+          if (-not (Test-Path tools/cimipkg.exe)) {
+            throw "Failed to download cimipkg: tools/cimipkg.exe not found"
+          }
           Write-Host "Downloaded cimipkg: $(Get-Item tools/cimipkg.exe | Select-Object -ExpandProperty Length) bytes"
 
       - name: Build MSI packages
