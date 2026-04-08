@@ -1,144 +1,159 @@
-name: Build and Release
+name: CI
 
 on:
   push:
-    branches: [ main ]
-    tags: [ 'v*' ]
+    branches: [main]
   pull_request:
-    branches: [ main ]
+    branches: [main]
 
 env:
-  DOTNET_VERSION: '9.0.x'
+  DOTNET_VERSION: '10.0.x'
 
 jobs:
   build:
     runs-on: windows-latest
-    
-    steps:
-    - name: Checkout code
-      uses: actions/checkout@v4
-      
-    - name: Setup .NET
-      uses: actions/setup-dotnet@v4
-      with:
-        dotnet-version: ${{ env.DOTNET_VERSION }}
-        
-    - name: Install WiX Toolset
-      run: dotnet tool install --global wix
-      
-    - name: Restore dependencies
-      run: dotnet restore
-      
-    - name: Build application
-      run: .\build.ps1 -Configuration Release
-      shell: pwsh
-      
-    - name: Test executable
-      run: .\dist\installer.exe --vers
-      shell: pwsh
-      
-    - name: Build MSI
-      run: .\build\build-msi.ps1 -Configuration Release -Version "1.0.${{ github.run_number }}"
-      shell: pwsh
-      
-    - name: Upload executable artifact
-      uses: actions/upload-artifact@v4
-      with:
-        name: sbin-installer-exe
-        path: dist/installer.exe
-        
-    - name: Upload MSI artifact
-      uses: actions/upload-artifact@v4
-      with:
-        name: sbin-installer-msi
-        path: dist/*.msi
-        
-    - name: Create Release (on tag)
-      if: startsWith(github.ref, 'refs/tags/')
-      uses: softprops/action-gh-release@v1
-      with:
-        files: |
-          dist/installer.exe
-          dist/*.msi
-        body: |
-          ## sbin-installer Release
-          
-          ### Installation Options
-          
-          **Executable (Portable)**
-          - Download `installer.exe` 
-          - Place in your PATH or run directly
-          - No installation required
-          
-          **MSI Installer (Recommended)**
-          - Download and run the `.msi` file
-          - Installs to `C:\Program Files\sbin\`
-          - Automatically adds to system PATH
-          - Includes uninstaller
-          
-          ### Usage
-          ```
-          installer --pkg package.pkg --target /
-          installer --pkginfo --pkg package.pkg
-          installer --help
-          ```
-          
-          ### What's Changed
-          - Automatic build from commit ${{ github.sha }}
-          - Built with .NET ${{ env.DOTNET_VERSION }}
-          - Supports Windows x64, ARM64, and x86
-          
-        draft: false
-        prerelease: false
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    outputs:
+      version: ${{ steps.version.outputs.version }}
 
-  # Separate job for signed builds (requires certificate secrets)
-  build-signed:
-    if: github.event_name != 'pull_request' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/'))
-    runs-on: windows-latest
-    needs: build
-    
     steps:
-    - name: Checkout code
-      uses: actions/checkout@v4
-      
-    - name: Setup .NET
-      uses: actions/setup-dotnet@v4
-      with:
-        dotnet-version: ${{ env.DOTNET_VERSION }}
-        
-    - name: Install WiX Toolset
-      run: dotnet tool install --global wix
-      
-    - name: Import code signing certificate
-      if: env.CERTIFICATE_BASE64 != ''
-      run: |
-        $cert = [System.Convert]::FromBase64String($env:CERTIFICATE_BASE64)
-        Set-Content -Path "cert.p12" -Value $cert -AsByteStream
-        $password = ConvertTo-SecureString $env:CERTIFICATE_PASSWORD -AsPlainText -Force
-        $cert = Import-PfxCertificate -FilePath "cert.p12" -CertStoreLocation Cert:\CurrentUser\My -Password $password
-        Write-Output "CERT_THUMBPRINT=$($cert.Thumbprint)" >> $env:GITHUB_ENV
-      shell: pwsh
-      env:
-        CERTIFICATE_BASE64: ${{ secrets.CERTIFICATE_BASE64 }}
-        CERTIFICATE_PASSWORD: ${{ secrets.CERTIFICATE_PASSWORD }}
-        
-    - name: Build signed application
-      if: env.CERT_THUMBPRINT != ''
-      run: .\build.ps1 -Configuration Release -CertificateThumbprint $env:CERT_THUMBPRINT
-      shell: pwsh
-      
-    - name: Build signed MSI
-      if: env.CERT_THUMBPRINT != ''
-      run: .\build\build-msi.ps1 -Configuration Release -Version "1.0.${{ github.run_number }}" -CertificateThumbprint $env:CERT_THUMBPRINT
-      shell: pwsh
-      
-    - name: Upload signed artifacts
-      if: env.CERT_THUMBPRINT != ''
-      uses: actions/upload-artifact@v4
-      with:
-        name: sbin-installer-signed
-        path: |
-          dist/installer.exe
-          dist/*.msi
+      - uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: ${{ env.DOTNET_VERSION }}
+
+      - name: Determine version
+        id: version
+        shell: pwsh
+        run: |
+          $version = Get-Date -Format "yyyy.MM.dd.HHmm"
+          echo "version=$version" >> $env:GITHUB_OUTPUT
+
+      - name: Build binaries
+        shell: pwsh
+        run: |
+          $version = "${{ steps.version.outputs.version }}"
+          foreach ($rid in @("win-x64", "win-arm64")) {
+            Write-Host "Publishing for $rid..."
+            dotnet publish src/installer/installer.csproj `
+              -c Release -r $rid --self-contained `
+              -o "publish/$rid" `
+              -p:PublishSingleFile=true `
+              -p:PublishTrimmed=true `
+              -p:TrimMode=partial `
+              -p:EnableCompressionInSingleFile=true `
+              -p:Version=$version `
+              -p:AssemblyVersion=$version `
+              -p:FileVersion=$version `
+              -p:InformationalVersion=$version
+
+            $arch = if ($rid -eq "win-x64") { "x64" } else { "arm64" }
+            New-Item -ItemType Directory -Path "dist/$arch" -Force | Out-Null
+            Copy-Item "publish/$rid/installer.exe" "dist/$arch/installer.exe" -Force
+            Write-Host "Built: dist/$arch/installer.exe"
+          }
+
+      - name: Test executable
+        shell: pwsh
+        run: .\dist\x64\installer.exe --vers
+
+      - name: Download cimipkg
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          New-Item -ItemType Directory -Path tools -Force | Out-Null
+          gh release download --repo windowsadmins/cimian-pkg --pattern "cimipkg-win-x64.zip" --dir tools
+          Expand-Archive -Path tools/cimipkg-win-x64.zip -DestinationPath tools -Force
+          Write-Host "Downloaded cimipkg: $(Get-Item tools/cimipkg.exe | Select-Object -ExpandProperty Length) bytes"
+
+      - name: Build MSI packages
+        shell: pwsh
+        run: |
+          $version = "${{ steps.version.outputs.version }}"
+          New-Item -ItemType Directory -Path release -Force | Out-Null
+
+          foreach ($arch in @("x64", "arm64")) {
+            $stagingDir = "staging-$arch"
+
+            # Create cimipkg project structure
+            New-Item -ItemType Directory -Path "$stagingDir/payload" -Force | Out-Null
+            New-Item -ItemType Directory -Path "$stagingDir/scripts" -Force | Out-Null
+
+            # Copy binary to payload
+            Copy-Item "dist/$arch/installer.exe" "$stagingDir/payload/" -Force
+
+            # Process templates
+            (Get-Content "build/pkg/build-info.yaml" -Raw) `
+              -replace '\{\{VERSION\}\}', $version `
+              -replace '\{\{ARCHITECTURE\}\}', $arch |
+              Set-Content "$stagingDir/build-info.yaml" -Encoding UTF8
+
+            Get-ChildItem "build/pkg/scripts/*.ps1" | ForEach-Object {
+              (Get-Content $_.FullName -Raw) `
+                -replace '\{\{VERSION\}\}', $version |
+                Set-Content "$stagingDir/scripts/$($_.Name)" -Encoding UTF8
+            }
+
+            # Build MSI via cimipkg
+            Write-Host "Building MSI for $arch..."
+            & .\tools\cimipkg.exe --verbose $stagingDir
+            if ($LASTEXITCODE -ne 0) {
+              Write-Host "::error::cimipkg MSI build failed for $arch"
+              exit 1
+            }
+
+            # Find and rename MSI output
+            $msi = Get-ChildItem "$stagingDir/build/*.msi" -ErrorAction SilentlyContinue | Select-Object -First 1
+            if ($msi) {
+              $dest = "release/installer-$arch-$version.msi"
+              Move-Item $msi.FullName $dest -Force
+              Write-Host "MSI created: $dest ($('{0:N2}' -f ((Get-Item $dest).Length / 1MB)) MB)"
+            } else {
+              Write-Host "::error::MSI output not found for $arch"
+              exit 1
+            }
+          }
+
+      - name: Prepare release binaries
+        shell: pwsh
+        run: |
+          foreach ($arch in @("x64", "arm64")) {
+            Compress-Archive -Path "dist/$arch/installer.exe" -DestinationPath "release/installer-$arch.zip" -Force
+            Write-Host "Created: release/installer-$arch.zip"
+          }
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-artifacts
+          path: release/*
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main'
+    permissions:
+      contents: write
+
+    steps:
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: release-artifacts
+          path: release
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ needs.build.outputs.version }}
+          name: installer ${{ needs.build.outputs.version }}
+          generate_release_notes: true
+          files: release/*
+
+      - name: Delete tag
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api -X DELETE "repos/${{ github.repository }}/git/refs/tags/v${{ needs.build.outputs.version }}" || true
