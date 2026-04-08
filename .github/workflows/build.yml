@@ -8,6 +8,7 @@ on:
 
 env:
   DOTNET_VERSION: '10.0.x'
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
   build:
@@ -170,6 +171,18 @@ jobs:
           name: installer ${{ needs.build.outputs.version }}
           generate_release_notes: true
           files: release/*
+          body: |
+            Binaries and MSI packages are provided **unsigned**. For enterprise deployment, sign them with your organization's code signing certificate before distribution:
+
+            ```powershell
+            # Extract and sign binaries
+            Expand-Archive -Path installer-x64.zip -DestinationPath .
+            signtool sign /fd SHA256 /tr https://timestamp.digicert.com /td SHA256 /n "Your Certificate Name" installer.exe
+
+            # Sign MSI packages
+            signtool sign /fd SHA256 /tr https://timestamp.digicert.com /td SHA256 /n "Your Certificate Name" installer-x64-${{ needs.build.outputs.version }}.msi
+            signtool sign /fd SHA256 /tr https://timestamp.digicert.com /td SHA256 /n "Your Certificate Name" installer-arm64-${{ needs.build.outputs.version }}.msi
+            ```
 
       - name: Delete tag
         env:
