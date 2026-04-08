@@ -57,10 +57,67 @@ jobs:
         shell: pwsh
         run: .\dist\x64\installer.exe --version
 
+      - name: Download cimipkg
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          New-Item -ItemType Directory -Path tools -Force | Out-Null
+          gh release download --repo windowsadmins/cimian-pkg --pattern "cimipkg-win-x64.zip" --dir tools
+          Expand-Archive -Path tools/cimipkg-win-x64.zip -DestinationPath tools -Force
+          Write-Host "Downloaded cimipkg: $(Get-Item tools/cimipkg.exe | Select-Object -ExpandProperty Length) bytes"
+
+      - name: Build MSI packages
+        shell: pwsh
+        run: |
+          $version = "${{ steps.version.outputs.version }}"
+          New-Item -ItemType Directory -Path release -Force | Out-Null
+
+          foreach ($arch in @("x64", "arm64")) {
+            $stagingDir = "staging-$arch"
+
+            # Create cimipkg project structure
+            New-Item -ItemType Directory -Path "$stagingDir/payload" -Force | Out-Null
+            New-Item -ItemType Directory -Path "$stagingDir/scripts" -Force | Out-Null
+
+            # Copy binary to payload
+            Copy-Item "dist/$arch/installer.exe" "$stagingDir/payload/" -Force
+
+            # Process templates
+            (Get-Content "build/pkg/build-info.yaml" -Raw) `
+              -replace '\{\{VERSION\}\}', $version `
+              -replace '\{\{ARCHITECTURE\}\}', $arch |
+              Set-Content "$stagingDir/build-info.yaml" -Encoding UTF8
+
+            Get-ChildItem "build/pkg/scripts/*.ps1" | ForEach-Object {
+              (Get-Content $_.FullName -Raw) `
+                -replace '\{\{VERSION\}\}', $version |
+                Set-Content "$stagingDir/scripts/$($_.Name)" -Encoding UTF8
+            }
+
+            # Build MSI via cimipkg
+            Write-Host "Building MSI for $arch..."
+            & .\tools\cimipkg.exe --verbose $stagingDir
+            if ($LASTEXITCODE -ne 0) {
+              Write-Host "::error::cimipkg MSI build failed for $arch"
+              exit 1
+            }
+
+            # Find and rename MSI output
+            $msi = Get-ChildItem "$stagingDir/build/*.msi" -ErrorAction SilentlyContinue | Select-Object -First 1
+            if ($msi) {
+              $dest = "release/installer-$arch-$version.msi"
+              Move-Item $msi.FullName $dest -Force
+              Write-Host "MSI created: $dest ($('{0:N2}' -f ((Get-Item $dest).Length / 1MB)) MB)"
+            } else {
+              Write-Host "::error::MSI output not found for $arch"
+              exit 1
+            }
+          }
+
       - name: Prepare release binaries
         shell: pwsh
         run: |
-          New-Item -ItemType Directory -Path release -Force | Out-Null
           foreach ($arch in @("x64", "arm64")) {
             Compress-Archive -Path "dist/$arch/installer.exe" -DestinationPath "release/installer-$arch.zip" -Force
             Write-Host "Created: release/installer-$arch.zip"
