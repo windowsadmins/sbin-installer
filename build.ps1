@@ -277,23 +277,24 @@ foreach ($RuntimeId in $RuntimeIds) {
         # Requires cimipkg 2026.04.09+ which defaults to .msi output
         if ($RuntimeIds.IndexOf($RuntimeId) -eq 0) {
             $cimipkgPath = $null
-            $candidatePaths = @(
-                # Prefer freshly-built local cimipkg from the CimianTools submodule
-                (Join-Path $PSScriptRoot "..\..\packages\CimianTools\release\x64\cimipkg.exe"),
-                (Join-Path $PSScriptRoot "..\..\packages\CimianTools\release\arm64\cimipkg.exe"),
-                # Fallback to system install
-                "C:\Program Files\Cimian\cimipkg.exe"
-            )
-            foreach ($candidate in $candidatePaths) {
-                if (Test-Path $candidate) {
-                    $cimipkgPath = (Resolve-Path $candidate).Path
-                    break
+            # Lookup order (works both standalone and inside a monorepo):
+            #   1. PATH — honours whatever the dev has installed
+            #   2. tools\cimipkg.exe — CI workflow drops it here
+            #   3. C:\Program Files\Cimian\cimipkg.exe — system install
+            $cmd = Get-Command cimipkg -ErrorAction SilentlyContinue
+            if ($cmd) {
+                $cimipkgPath = $cmd.Source
+            } else {
+                $candidatePaths = @(
+                    (Join-Path $PSScriptRoot "tools\cimipkg.exe"),
+                    "C:\Program Files\Cimian\cimipkg.exe"
+                )
+                foreach ($candidate in $candidatePaths) {
+                    if (Test-Path $candidate) {
+                        $cimipkgPath = (Resolve-Path $candidate).Path
+                        break
+                    }
                 }
-            }
-            # Last resort: PATH lookup
-            if (-not $cimipkgPath) {
-                $cmd = Get-Command cimipkg -ErrorAction SilentlyContinue
-                if ($cmd) { $cimipkgPath = $cmd.Source }
             }
 
             if ($cimipkgPath) {
@@ -302,12 +303,12 @@ foreach ($RuntimeId in $RuntimeIds) {
                 $cimipkgHelp = & $cimipkgPath --help 2>&1 | Out-String
                 if ($cimipkgHelp -notmatch 'default is \.msi') {
                     Write-Warning "cimipkg at $cimipkgPath does not default to .msi output"
-                    Write-Host "Rebuild cimipkg from packages/CimianTools (requires 2026.04.09+)" -ForegroundColor Yellow
+                    Write-Host "Upgrade to cimipkg 2026.04.09+ or install from https://github.com/windowsadmins/cimian-pkg" -ForegroundColor Yellow
                     $cimipkgPath = $null
                 }
             } else {
                 Write-Warning "cimipkg not found - MSI creation skipped for all architectures"
-                Write-Host "Build it from packages/CimianTools or install from https://github.com/windowsadmins/cimian-pkg" -ForegroundColor Yellow
+                Write-Host "Install from https://github.com/windowsadmins/cimian-pkg or drop it at tools\cimipkg.exe" -ForegroundColor Yellow
             }
         }
 

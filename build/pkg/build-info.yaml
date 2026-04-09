@@ -6,3 +6,4 @@ product:
   description: A lightweight package installer for Windows, inspired by macOS /usr/sbin/installer
   architecture: "{{ARCHITECTURE}}"
 install_location: 'C:\Program Files\sbin'
+postinstall_action: script
