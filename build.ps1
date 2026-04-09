@@ -187,6 +187,11 @@ foreach ($RuntimeId in $RuntimeIds) {
     
     # Publish single-file executable
     Write-Host "Publishing single-file executable for $RuntimeId..." -ForegroundColor Yellow
+    # Remove stale output first so a failed publish can't leave a previous build
+    # in place — otherwise Test-Path below happily passes on stale binaries.
+    if (Test-Path $ArchOutputDir) {
+        Remove-Item $ArchOutputDir -Recurse -Force
+    }
     dotnet publish src/installer/installer.csproj `
         --configuration $Configuration `
         --runtime $RuntimeId `
@@ -201,12 +206,14 @@ foreach ($RuntimeId in $RuntimeIds) {
         -p:InformationalVersion=$Version `
         -p:IncludeSourceRevisionInInformationalVersion=false `
         -p:UseSourceLink=false
+    if ($LASTEXITCODE -ne 0) {
+        throw "dotnet publish failed for $RuntimeId with exit code $LASTEXITCODE"
+    }
 
     $ExePath = "$ArchOutputDir\installer.exe"
-    
+
     if (-not (Test-Path $ExePath)) {
-        Write-Error "Failed to build executable for $RuntimeId"
-        continue
+        throw "Publish reported success but $ExePath is missing"
     }
 
     # Show file size
@@ -261,136 +268,125 @@ foreach ($RuntimeId in $RuntimeIds) {
         }
     }
 
-    # Build MSI package (unless skipped)
+    # Build MSI package via cimipkg (unless skipped)
     if (-not $SkipMsi) {
         Write-Host ""
         Write-Host "Building MSI package for $ArchName..." -ForegroundColor Green
-        
-        # Convert timestamp to MSI-compatible version format
-        $msiVersion = $Version -replace '^20(\d{2})\.0?(\d+)\.0?(\d+)\.(\d{4})$', '$1.$2.$3.$4'
-        Write-Host "MSI version ($ArchName): $msiVersion" -ForegroundColor Gray
 
-        # Check for WiX toolset (do this once)
+        # Locate cimipkg (do this once)
+        # Requires cimipkg 2026.04.09+ which defaults to .msi output
         if ($RuntimeIds.IndexOf($RuntimeId) -eq 0) {
-            $wixFound = $false
-            $wixVersion = $null
-            try {
-                $wixTool = & dotnet tool list --global 2>$null | Select-String "^wix\s"
-                if ($wixTool) {
-                    $wixFound = $true
-                    # Parse version from output like "wix             5.0.1        wix"
-                    $wixInfo = $wixTool.ToString().Trim() -split '\s+'
-                    if ($wixInfo.Length -ge 2) {
-                        $wixVersion = $wixInfo[1]
-                        $majorVersion = [int]($wixVersion -split '\.')[0]
-                        Write-Host "✅ WiX Toolset v$majorVersion found (version $wixVersion)" -ForegroundColor Green
-                    } else {
-                        Write-Host "✅ WiX Toolset found: $($wixTool.ToString().Trim())" -ForegroundColor Green
-                    }
+            $cimipkgPath = $null
+            $candidatePaths = @(
+                # Prefer freshly-built local cimipkg from the CimianTools submodule
+                (Join-Path $PSScriptRoot "..\..\packages\CimianTools\release\x64\cimipkg.exe"),
+                (Join-Path $PSScriptRoot "..\..\packages\CimianTools\release\arm64\cimipkg.exe"),
+                # Fallback to system install
+                "C:\Program Files\Cimian\cimipkg.exe"
+            )
+            foreach ($candidate in $candidatePaths) {
+                if (Test-Path $candidate) {
+                    $cimipkgPath = (Resolve-Path $candidate).Path
+                    break
                 }
-            } catch {
-                Write-Warning "Failed to check for WiX toolset: $($_.Exception.Message)"
             }
-            
-            if (-not $wixFound) {
-                Write-Warning "WiX Toolset not found - MSI creation skipped for all architectures"
-                Write-Host "Install with: dotnet tool install --global wix" -ForegroundColor Yellow
+            # Last resort: PATH lookup
+            if (-not $cimipkgPath) {
+                $cmd = Get-Command cimipkg -ErrorAction SilentlyContinue
+                if ($cmd) { $cimipkgPath = $cmd.Source }
+            }
+
+            if ($cimipkgPath) {
+                Write-Host "Using cimipkg: $cimipkgPath" -ForegroundColor Gray
+                # Verify cimipkg version supports .msi default output (2026.04.09+)
+                $cimipkgHelp = & $cimipkgPath --help 2>&1 | Out-String
+                if ($cimipkgHelp -notmatch 'default is \.msi') {
+                    Write-Warning "cimipkg at $cimipkgPath does not default to .msi output"
+                    Write-Host "Rebuild cimipkg from packages/CimianTools (requires 2026.04.09+)" -ForegroundColor Yellow
+                    $cimipkgPath = $null
+                }
+            } else {
+                Write-Warning "cimipkg not found - MSI creation skipped for all architectures"
+                Write-Host "Build it from packages/CimianTools or install from https://github.com/windowsadmins/cimian-pkg" -ForegroundColor Yellow
             }
         }
-        
-        if ($wixFound) {
+
+        if ($cimipkgPath) {
             try {
-                $MsiDir = Join-Path $PSScriptRoot "build\msi"
-                $MsiStagingDir = Join-Path $PSScriptRoot "build\msi-staging-$ArchName"
-                
-                # Clean and prepare MSI staging directory
-                if (Test-Path $MsiStagingDir) {
-                    Remove-Item $MsiStagingDir -Recurse -Force
+                $StagingDir = Join-Path $PSScriptRoot "build\staging-$ArchName"
+
+                # Clean and create cimipkg project structure
+                if (Test-Path $StagingDir) {
+                    Remove-Item $StagingDir -Recurse -Force
                 }
-                New-Item -ItemType Directory -Path $MsiStagingDir -Force | Out-Null
-                
-                # Copy executable to staging
-                Copy-Item $ExePath (Join-Path $MsiStagingDir "installer.exe") -Force
-                Write-Verbose "Copied installer.exe to MSI staging ($ArchName)"
-                
-                # Build MSI using WiX with architecture-specific settings
-                Write-Host "Building MSI with WiX using .wixproj ($ArchName)..." -ForegroundColor Yellow
-                $WixProjPath = Join-Path $MsiDir "sbin-installer.wixproj"
-                
-                # Build MSI output path with architecture
-                $MsiPath = Join-Path $PSScriptRoot "dist\sbin-installer-$ArchName-$Version.msi"
-                
-                # Determine platform for WiX (map win-arm64 to ARM64, win-x64 to x64)
-                $WixPlatform = if ($RuntimeId -eq "win-arm64") { "ARM64" } else { "x64" }
-                
-                # Build with dotnet using architecture-specific settings
-                $buildArgs = @(
-                    "build"
-                    $WixProjPath
-                    "-p:Platform=$WixPlatform"
-                    "-p:InstallerPlatform=$WixPlatform"
-                    "-p:ProductVersion=$msiVersion"
-                    "-p:BinDir=$MsiStagingDir"
-                    "-p:OutputName=sbin-installer-$ArchName"
-                    "--configuration", "Release"
-                    "--nologo"
-                    "--verbosity", "minimal"
-                )
-                
-                Write-Host "Running: dotnet $($buildArgs -join ' ')" -ForegroundColor Gray
-                & dotnet @buildArgs
+                New-Item -ItemType Directory -Path (Join-Path $StagingDir "payload") -Force | Out-Null
+                New-Item -ItemType Directory -Path (Join-Path $StagingDir "scripts") -Force | Out-Null
+
+                # Copy signed executable into payload
+                Copy-Item $ExePath (Join-Path $StagingDir "payload\installer.exe") -Force
+                Write-Verbose "Copied installer.exe to cimipkg staging ($ArchName)"
+
+                # Process build-info.yaml template (substitute VERSION and ARCHITECTURE)
+                $buildInfoTemplate = Join-Path $PSScriptRoot "build\pkg\build-info.yaml"
+                (Get-Content $buildInfoTemplate -Raw) `
+                    -replace '\{\{VERSION\}\}', $Version `
+                    -replace '\{\{ARCHITECTURE\}\}', $ArchName |
+                    Set-Content (Join-Path $StagingDir "build-info.yaml") -Encoding UTF8
+
+                # Process script templates (substitute VERSION)
+                Get-ChildItem (Join-Path $PSScriptRoot "build\pkg\scripts\*.ps1") | ForEach-Object {
+                    (Get-Content $_.FullName -Raw) `
+                        -replace '\{\{VERSION\}\}', $Version |
+                        Set-Content (Join-Path $StagingDir "scripts\$($_.Name)") -Encoding UTF8
+                }
+
+                # Build MSI via cimipkg (signs inline when thumbprint provided)
+                Write-Host "Building MSI with cimipkg ($ArchName)..." -ForegroundColor Yellow
+                $cimipkgArgs = @("--verbose", $StagingDir)
+                if ($CertificateThumbprint) {
+                    $cimipkgArgs += @("--sign-thumbprint", $CertificateThumbprint)
+                }
+                Write-Host "Running: $cimipkgPath $($cimipkgArgs -join ' ')" -ForegroundColor Gray
+                & $cimipkgPath @cimipkgArgs
                 if ($LASTEXITCODE -ne 0) {
-                    throw "WiX build failed for $ArchName with exit code $LASTEXITCODE"
+                    throw "cimipkg MSI build failed for $ArchName with exit code $LASTEXITCODE"
                 }
-                
-                # Find the output MSI in the build output
-                $builtMsi = Join-Path $MsiDir "bin\$WixPlatform\Release\sbin-installer-$ArchName.msi"
-                if (Test-Path $builtMsi) {
-                    Copy-Item $builtMsi $MsiPath -Force
-                    Write-Host "MSI package built successfully at $MsiPath" -ForegroundColor Green
-                } else {
-                    # Try alternate paths
-                    $altPaths = @(
-                        (Join-Path $MsiDir "bin\$WixPlatform\Release\sbin-installer-$ArchName.msi"),
-                        (Join-Path $MsiDir "bin\$WixPlatform\Debug\sbin-installer-$ArchName.msi"),
-                        (Join-Path $MsiDir "bin\$WixPlatform\Release\sbin-installer.msi"),
-                        (Join-Path $MsiDir "bin\x64\Release\sbin-installer.msi"),
-                        (Join-Path $MsiDir "bin\Release\sbin-installer.msi"),
-                        (Join-Path $MsiDir "bin\sbin-installer.msi")
-                    )
-                    $found = $false
-                    foreach ($altPath in $altPaths) {
-                        if (Test-Path $altPath) {
-                            Copy-Item $altPath $MsiPath -Force
-                            Write-Host "MSI package built successfully at $MsiPath (found at $altPath)" -ForegroundColor Green
-                            $found = $true
-                            break
-                        }
-                    }
-                    if (-not $found) {
-                        throw "WiX build completed but output MSI not found for $ArchName. Expected at $builtMsi"
-                    }
+
+                # Find produced MSI under <staging>/build/*.msi
+                $producedMsi = Get-ChildItem (Join-Path $StagingDir "build") -Filter "*.msi" -ErrorAction SilentlyContinue | Select-Object -First 1
+                if (-not $producedMsi) {
+                    throw "cimipkg completed but no .msi produced in $StagingDir\build"
                 }
-                
-                # Sign MSI if certificate is available
+
+                # Move MSI to dist/ with conventional name
+                $MsiPath = Join-Path $PSScriptRoot "dist\sbin-installer-$ArchName-$Version.msi"
+                Move-Item $producedMsi.FullName $MsiPath -Force
+                Write-Host "MSI package built successfully at $MsiPath" -ForegroundColor Green
+
+                # Fallback: sign MSI here if cimipkg didn't (no thumbprint passed through) but we have one locally
                 if ($CertificateThumbprint -and $SignTool) {
-                    Write-Host "Signing MSI ($ArchName)..." -ForegroundColor Yellow
-                    $null = & $SignTool sign /sha1 $CertificateThumbprint /fd SHA256 /tr $TimeStampServer /td SHA256 $MsiPath 2>&1
-                    
-                    if ($LASTEXITCODE -eq 0) {
-                        Write-Host "Successfully signed MSI ($ArchName)" -ForegroundColor Green
+                    # Check if already signed by cimipkg to avoid double-signing
+                    $sigInfo = Get-AuthenticodeSignature $MsiPath
+                    if ($sigInfo.Status -ne "Valid") {
+                        Write-Host "Signing MSI ($ArchName)..." -ForegroundColor Yellow
+                        $null = & $SignTool sign /sha1 $CertificateThumbprint /fd SHA256 /tr $TimeStampServer /td SHA256 $MsiPath 2>&1
+                        if ($LASTEXITCODE -eq 0) {
+                            Write-Host "Successfully signed MSI ($ArchName)" -ForegroundColor Green
+                        } else {
+                            Write-Warning "MSI signing failed for $ArchName"
+                        }
                     } else {
-                        Write-Warning "MSI signing failed for $ArchName"
+                        Write-Host "MSI already signed by cimipkg ($ArchName)" -ForegroundColor Gray
                     }
                 }
-                
+
                 $MsiFile = Get-Item $MsiPath
                 Write-Host "Final MSI ($ArchName): $MsiPath" -ForegroundColor Cyan
                 Write-Host "MSI size ($ArchName): $([math]::Round($MsiFile.Length / 1MB, 2)) MB" -ForegroundColor Cyan
-                
+
                 # Clean up staging directory
-                Remove-Item $MsiStagingDir -Recurse -Force -ErrorAction SilentlyContinue
-                
+                Remove-Item $StagingDir -Recurse -Force -ErrorAction SilentlyContinue
+
             } catch {
                 Write-Error "MSI creation failed for $ArchName : $($_.Exception.Message)"
                 continue
