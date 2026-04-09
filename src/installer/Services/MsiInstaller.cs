@@ -179,6 +179,20 @@ public class MsiInstaller
         var result = new InstallResult();
         var logs = new List<string>();
 
+        // Reject malformed product codes up-front so a later "already uninstalled"
+        // shortcut can't mask a typo or garbage input. Windows Installer product
+        // codes are braced GUIDs: {XXXXXXXX-XXXX-XXXX-XXXX-XXXXXXXXXXXX}.
+        if (string.IsNullOrWhiteSpace(productCode) ||
+            !System.Text.RegularExpressions.Regex.IsMatch(
+                productCode,
+                @"^\{[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}\}$"))
+        {
+            result.Message = $"Invalid product code format: '{productCode}' (expected braced GUID)";
+            result.ExitCode = 1;
+            result.Logs = logs;
+            return result;
+        }
+
         try
         {
             logs.Add($"Uninstalling product: {productCode}");
@@ -200,7 +214,7 @@ public class MsiInstaller
             }
             catch (ArgumentException)
             {
-                // ProductInstallation throws if product code isn't recognized — treat as absent
+                // Valid-format GUID that Windows Installer doesn't recognize — treat as absent
                 logs.Add($"Product {productCode} not found (already uninstalled)");
                 result.Success = true;
                 result.ExitCode = 0;
