@@ -19,11 +19,13 @@ public class MsiInstaller
 
     /// <summary>
     /// Install an MSI package natively using the Windows Installer API.
+    /// Automatically detects and removes conflicting installations at the same location.
     /// </summary>
     public InstallResult Install(string msiPath, InstallOptions options)
     {
         var result = new InstallResult();
         var logs = new List<string>();
+        var conflicts = new List<ConflictingProduct>();
 
         if (!File.Exists(msiPath))
         {
@@ -39,6 +41,8 @@ public class MsiInstaller
             // Read MSI metadata before installation
             string productName = "Unknown";
             string productVersion = "";
+            string upgradeCode = "";
+            string installLocation = "";
             try
             {
                 using var db = new Database(msiPath, DatabaseOpenMode.ReadOnly);
@@ -46,12 +50,26 @@ public class MsiInstaller
                     "SELECT `Value` FROM `Property` WHERE `Property` = 'ProductName'")?.ToString() ?? "Unknown";
                 productVersion = db.ExecuteScalar(
                     "SELECT `Value` FROM `Property` WHERE `Property` = 'ProductVersion'")?.ToString() ?? "";
+                upgradeCode = db.ExecuteScalar(
+                    "SELECT `Value` FROM `Property` WHERE `Property` = 'UpgradeCode'")?.ToString() ?? "";
+                // ARPINSTALLLOCATION or custom property for install path
+                installLocation = db.ExecuteScalar(
+                    "SELECT `Value` FROM `Property` WHERE `Property` = 'ARPINSTALLLOCATION'")?.ToString() ?? "";
+                if (string.IsNullOrEmpty(installLocation))
+                {
+                    // Try to get from Directory table - resolve INSTALLFOLDER
+                    installLocation = db.ExecuteScalar(
+                        "SELECT `DefaultDir` FROM `Directory` WHERE `Directory` = 'INSTALLFOLDER'")?.ToString() ?? "";
+                }
                 logs.Add($"Product: {productName} {productVersion}");
             }
             catch (Exception ex)
             {
                 _logger.LogDebug("Could not pre-read MSI metadata: {Error}", ex.Message);
             }
+
+            // Find conflicting installations (don't remove yet -- remove after successful install)
+            conflicts = FindConflictingProducts(productName, upgradeCode, logs);
 
             // Configure silent UI
             Installer.SetInternalUI(InstallUIOptions.Silent);
@@ -84,6 +102,21 @@ public class MsiInstaller
             logs.Add("Installing...");
             Installer.InstallProduct(msiPath, properties);
 
+            // Post-install: remove conflicting products, then repair to restore any
+            // files the old uninstall may have deleted (different component GUIDs)
+            if (conflicts.Count > 0)
+            {
+                logs.Add($"Removing {conflicts.Count} conflicting product(s) after successful install...");
+                RemoveProducts(conflicts, logs);
+
+                var repaired = RepairInstallation(msiPath, logs);
+                if (!repaired)
+                {
+                    logs.Add("Warning: repair did not succeed; some files may need manual restoration");
+                    _logger.LogWarning("Post-conflict repair failed for {Product}", productName);
+                }
+            }
+
             logs.Add($"Installation completed successfully: {productName} {productVersion}");
             result.Success = true;
             result.Message = $"Installed {productName} {productVersion}";
@@ -95,13 +128,21 @@ public class MsiInstaller
             result.Message = $"MSI installation failed: {ex.Message}";
             result.ExitCode = ex.ErrorCode;
 
-            // Check for reboot-required (3010)
+            // Check for reboot-required (3010) -- install succeeded, just needs reboot
             if (ex.ErrorCode == 3010)
             {
                 logs.Add("Reboot required to complete installation");
                 result.Success = true;
                 result.RestartAction = "restart";
                 result.ExitCode = 0;
+
+                // Still handle conflicts on 3010 (install succeeded)
+                if (conflicts.Count > 0)
+                {
+                    logs.Add($"Removing {conflicts.Count} conflicting product(s) after install...");
+                    RemoveProducts(conflicts, logs);
+                    RepairInstallation(msiPath, logs);
+                }
             }
         }
         catch (Exception ex)
@@ -154,6 +195,125 @@ public class MsiInstaller
     }
 
     /// <summary>
+    /// Find any existing installations of the same product that would conflict.
+    /// Searches all installed MSI products by name to find conflicting
+    /// installations regardless of UpgradeCode (handles WiX-to-cimipkg transitions).
+    /// Does NOT remove them -- caller decides when to remove.
+    /// </summary>
+    private List<ConflictingProduct> FindConflictingProducts(string productName, string newUpgradeCode, List<string> logs)
+    {
+        var conflicts = new List<ConflictingProduct>();
+
+        if (string.IsNullOrEmpty(productName) || productName == "Unknown")
+            return conflicts;
+
+        try
+        {
+            foreach (var product in ProductInstallation.AllProducts)
+            {
+                try
+                {
+                    var installedName = product.ProductName;
+                    var installedUpgradeCode = "";
+                    try { installedUpgradeCode = product["UpgradeCode"]?.ToString() ?? ""; } catch { }
+
+                    if (string.IsNullOrEmpty(installedName))
+                        continue;
+
+                    // Skip if same UpgradeCode -- MSI's own RemoveExistingProducts handles this
+                    if (!string.IsNullOrEmpty(newUpgradeCode) &&
+                        string.Equals(installedUpgradeCode, newUpgradeCode, StringComparison.OrdinalIgnoreCase))
+                        continue;
+
+                    // Match by product name (handles cross-UpgradeCode conflicts)
+                    if (string.Equals(installedName, productName, StringComparison.OrdinalIgnoreCase) ||
+                        installedName.StartsWith(productName, StringComparison.OrdinalIgnoreCase))
+                    {
+                        logs.Add($"Found conflicting installation: {installedName} ({product.ProductCode})");
+                        _logger.LogInformation("Found conflicting product: {Name} ({Code})",
+                            installedName, product.ProductCode);
+                        conflicts.Add(new ConflictingProduct(product.ProductCode, installedName));
+                    }
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogDebug("Could not inspect product: {Error}", ex.Message);
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug("Could not enumerate installed products: {Error}", ex.Message);
+        }
+
+        return conflicts;
+    }
+
+    /// <summary>
+    /// Remove a list of conflicting products by their product codes.
+    /// </summary>
+    private void RemoveProducts(List<ConflictingProduct> conflicts, List<string> logs)
+    {
+        foreach (var conflict in conflicts)
+        {
+            _logger.LogInformation("Removing conflicting product: {Name} ({Code})",
+                conflict.ProductName, conflict.ProductCode);
+
+            var uninstallResult = Uninstall(conflict.ProductCode);
+            if (uninstallResult.Success)
+            {
+                logs.Add($"Removed: {conflict.ProductName}");
+            }
+            else
+            {
+                logs.Add($"Warning: could not remove {conflict.ProductName}: {uninstallResult.Message}");
+                _logger.LogWarning("Failed to remove conflicting product {Name}: {Error}",
+                    conflict.ProductName, uninstallResult.Message);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Repair a newly installed MSI to restore files that may have been removed
+    /// when conflicting products (with different component GUIDs) were uninstalled.
+    /// </summary>
+    private bool RepairInstallation(string msiPath, List<string> logs)
+    {
+        try
+        {
+            logs.Add("Repairing installation to restore files removed during conflict cleanup...");
+            _logger.LogInformation("Running repair on {Msi} after conflict removal", Path.GetFileName(msiPath));
+
+            Installer.SetInternalUI(InstallUIOptions.Silent);
+            Installer.InstallProduct(msiPath,
+                "REINSTALL=ALL REINSTALLMODE=amus REBOOT=ReallySuppress ALLUSERS=1");
+
+            logs.Add("Repair completed successfully");
+            return true;
+        }
+        catch (InstallerException ex)
+        {
+            if (ex.ErrorCode == 3010)
+            {
+                logs.Add("Repair completed (reboot required)");
+                return true;
+            }
+
+            logs.Add($"Warning: repair failed ({ex.Message}), installation may have missing files");
+            _logger.LogWarning("Repair failed for {Msi}: {Error} (code {Code})",
+                Path.GetFileName(msiPath), ex.Message, ex.ErrorCode);
+            return false;
+        }
+        catch (Exception ex)
+        {
+            logs.Add($"Warning: repair failed unexpectedly ({ex.Message})");
+            _logger.LogWarning("Unexpected repair failure for {Msi}: {Error}",
+                Path.GetFileName(msiPath), ex.Message);
+            return false;
+        }
+    }
+
+    /// <summary>
     /// Query installed products by upgrade code using native Windows Installer API.
     /// Replaces the fragile PackGuid + registry walking approach.
     /// </summary>
@@ -201,3 +361,8 @@ public class InstalledProduct
     public string InstallDate { get; set; } = string.Empty;
     public string InstallLocation { get; set; } = string.Empty;
 }
+
+/// <summary>
+/// Represents a conflicting product found during pre-install scan.
+/// </summary>
+public record ConflictingProduct(string ProductCode, string ProductName);
