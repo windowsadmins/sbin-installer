@@ -45,6 +45,7 @@ class Program
         };
 
         // Core installation options
+        // TODO(pkg-sunset): Remove .pkg option handling
         var pkgOption = new Option<string>(
             aliases: new[] { "--pkg", "-pkg" },
             description: "Path to the .pkg or .nupkg file to install")
@@ -382,6 +383,7 @@ class Program
                     Console.WriteLine($"Copyright: {nuspec.Copyright}");
                     Console.WriteLine($"Dependencies: {nuspec.Dependencies.Count}");
                 }
+                // TODO(pkg-sunset): Remove PackageType.Pkg build-info display
                 else if (packageInfo.PackageType == PackageType.Pkg)
                 {
                     // Show BuildInfo details for .pkg files only

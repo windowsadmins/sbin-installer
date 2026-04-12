@@ -1,6 +1,6 @@
 # sbin-installer
 
-A lightweight, deterministic package installer for Windows supporting `.msi`, `.nupkg`, and `.pkg` formats.
+A lightweight, deterministic package installer for Windows supporting `.msi` and `.nupkg` formats.
 
 Inspired by the elegant simplicity of macOS package installation `/usr/sbin/installer` — this tool provides a simple, Chocolatey-free alternative for installing packages with a clean command-line interface.
 
@@ -32,7 +32,7 @@ A minimal, focused installer that:
 
 ## Package Source Structure
 
-Regardless of output format (`.msi`, `.nupkg`, or `.pkg`), every cimipkg
+Regardless of output format (`.msi` or `.nupkg`), every cimipkg
 project has the same source layout:
 
 ```
@@ -108,26 +108,6 @@ existing package is being upgraded or uninstalled — not on a fresh install.
 sbin-installer does not have this limitation and runs `chocolateyBeforeModify.ps1`
 unconditionally before every install.
 
-### .pkg Format (Legacy — deprecated)
-
-> **Note:** The `.pkg` format is deprecated. New packages should use `.msi`
-> (the default). sbin-installer continues to support `.pkg` for backward
-> compatibility, but no new features will be added to the `.pkg` code path.
-> Build with `cimipkg --pkg <project>` if you still need it.
-
-A `.pkg` file is a ZIP archive created by [cimipkg](https://github.com/windowsadmins/cimian-pkg):
-
-```
-package.pkg
-├── payload/
-│   └── example.txt
-├── scripts/
-│   ├── preinstall.ps1
-│   ├── postinstall.ps1
-│   └── uninstall.ps1
-└── build-info.yaml
-```
-
 ### Chocolatey Package Support
 
 `sbin-installer` installs `.nupkg` (NuGet/Chocolatey) packages with automatic compatibility shims:
@@ -169,28 +149,28 @@ installer.exe osquery.5.19.0.nupkg
 4. If conflicts were removed, repair to restore files with different component GUIDs
 5. Custom actions (preinstall/postinstall/uninstall) run automatically as part of the MSI sequence
 
-**nupkg and pkg packages:**
+**nupkg packages:**
 1. **Extract** the package to a temporary directory
-2. **Run pre-install script** (`chocolateyBeforeModify.ps1` for .nupkg or `scripts/preinstall.ps1` for .pkg)
+2. **Run pre-install script** (`chocolateyBeforeModify.ps1`)
 3. **Mirror payload** to the install location
-4. **Run post-install script** (`chocolateyInstall.ps1` for .nupkg or `scripts/postinstall.ps1` for .pkg)
+4. **Run post-install script** (`chocolateyInstall.ps1`)
 5. **Clean up** temporary extraction directory
 
 ## Usage
 
 ### Basic Installation
 ```bash
-installer --pkg package.pkg --target /
-installer --pkg package.pkg --target CurrentUserHomeDirectory
-installer --pkg C:\packages\myapp.pkg --target C:\Program Files
+installer --pkg package.msi --target /
+installer --pkg package.nupkg --target /
+installer --pkg C:\packages\myapp.msi --target C:\Program Files
 ```
 
 ### Package Information
 ```bash
-installer --pkginfo --pkg package.pkg
-installer --query RestartAction --pkg package.pkg
-installer --query name --pkg package.pkg
-installer --query version --pkg package.pkg
+installer --pkginfo --pkg package.msi
+installer --query RestartAction --pkg package.msi
+installer --query name --pkg package.msi
+installer --query version --pkg package.msi
 ```
 
 ### System Information
@@ -202,8 +182,8 @@ installer --vers
 
 ### Verbose Output
 ```bash
-installer --pkg package.pkg --target / --verbose
-installer --pkg package.pkg --target / --dumplog
+installer --pkg package.msi --target / --verbose
+installer --pkg package.msi --target / --dumplog
 ```
 
 ## Command-Line Options
@@ -212,7 +192,7 @@ Closely mirrors macOS `/usr/sbin/installer` options:
 
 | Option | Description |
 |--------|-------------|
-| `--pkg <path>` | Path to the .pkg file to install |
+| `--pkg <path>` | Path to the package file to install (.msi or .nupkg) |
 | `--target <device>` | Target directory (`/`, `CurrentUserHomeDirectory`, drive letter, or path) |
 | `--pkginfo` | Display package information |
 | `--dominfo` | Display domains available for installation |
@@ -247,9 +227,6 @@ cimipkg <project_directory>
 
 # Build a Chocolatey .nupkg
 cimipkg --nupkg <project_directory>
-
-# Build a legacy .pkg (deprecated)
-cimipkg --pkg <project_directory>
 ```
 
 ### Project Structure
@@ -298,7 +275,7 @@ the full placeholder reference.
 |---------|------------|----------------|
 | Cache management | Complex | None |
 | Source repositories | Required | Direct file path |
-| Package format | `.nupkg` | `.msi` (default) + `.nupkg` + `.pkg` (legacy) |
+| Package format | `.nupkg` | `.msi` (default) + `.nupkg` |
 | MSI support | Via `msiexec` shelling | Native DTF in-process API |
 | Dependency resolution | Full tree | Simple list |
 | Script support | tools\chocolatey*.ps1 | Yes (Supported via shim + scripts/*.ps1 + MSI custom actions) |
@@ -320,7 +297,7 @@ msiexec /i sbin-installer.msi /quiet
 
 **Portable Executable**
 ```bash
-installer --pkg package.pkg --target /
+installer --pkg package.msi --target /
 ```
 
 ### Enterprise Deployment
