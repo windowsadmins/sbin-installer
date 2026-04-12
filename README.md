@@ -30,6 +30,25 @@ A minimal, focused installer that:
 - **Native MSI support** - in-process DTF API, no `msiexec` dependency
 - **Native .NET** - single executable, no external dependencies
 
+## Package Source Structure
+
+Regardless of output format (`.msi`, `.nupkg`, or `.pkg`), every cimipkg
+project has the same source layout:
+
+```
+my-package/
+├── build-info.yaml    # Package metadata (required)
+├── payload/           # Files to install (optional)
+├── .env               # Signing credentials + script variables (optional, gitignored)
+└── scripts/           # PowerShell install/uninstall scripts (optional)
+    ├── preinstall.ps1
+    ├── postinstall.ps1
+    └── uninstall.ps1
+```
+
+`cimipkg` compiles this into whichever output format you choose. The source
+structure never changes — only the packaging does.
+
 ## How It Works
 
 ### .msi Format (Recommended)
@@ -39,8 +58,12 @@ and the recommended format for all new packages. cimipkg builds MSIs natively
 via the DTF API (WixToolset.Dtf.WindowsInstaller) — no WiX Toolset or
 `msiexec` dependency at build time.
 
-sbin-installer processes MSIs via the same DTF API in-process, providing
-better error handling and progress callbacks than shell-out to `msiexec.exe`.
+sbin-installer processes cimipkg-built MSIs via the same DTF API in-process,
+providing better error handling, progress callbacks, and conflict resolution
+than shell-out to `msiexec.exe`. It can install any standard MSI, but for
+third-party or non-cimipkg MSIs you're generally better off using `msiexec`
+directly — sbin-installer's upgrade logic (UpgradeCode detection, conflict
+removal, repair pass) is tuned for the conventions cimipkg embeds.
 
 **What's inside a cimipkg-built MSI:**
 
