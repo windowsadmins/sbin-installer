@@ -1,8 +1,8 @@
 # sbin-installer
 
-A lightweight, deterministic `.nupkg` or [cimipkg](https://github.com/windowsadmins/cimian-pkg) `.pkg` installer for Windows.
+A lightweight, deterministic package installer for Windows supporting `.msi`, `.nupkg`, and `.pkg` formats.
 
-Inspired by the elegant simplicity of macOS package installation `/usr/sbin/installer` - this tool provides a simple, Chocolatey-free alternative for installing packages with a clean command-line interface.
+Inspired by the elegant simplicity of macOS package installation `/usr/sbin/installer` — this tool provides a simple, Chocolatey-free alternative for installing packages with a clean command-line interface.
 
 This tool follows the Unix philosophy: **Do one thing and do it well.** 
 
@@ -18,7 +18,7 @@ All we want to run is `installer.exe --pkg /path/to/pkg --target /` on Windows.
 - Requires a "source" concept with folder scanning
 - Overly complex for simple package installation
 - Heavy dependencies and slow performance
-- Uses `.nupkg` extension (we prefer `.pkg`)
+- Uses `.nupkg` extension (we prefer `.msi`)
 
 ### This Solution
 
@@ -27,13 +27,44 @@ A minimal, focused installer that:
 - **No --source** - you specify `--pkg <pathToPackage>` directly
 - **Lightweight** - mimics `/usr/sbin/installer` behavior
 - **Deterministic** - predictable, simple operation
-- **Native .NET 9** - single executable, no external dependencies
+- **Native MSI support** - in-process DTF API, no `msiexec` dependency
+- **Native .NET** - single executable, no external dependencies
 
 ## How It Works
 
+### .msi Format (Recommended)
+
+`.msi` is now the **default output format** for [cimipkg](https://github.com/windowsadmins/cimian-pkg)
+and the recommended format for all new packages. cimipkg builds MSIs natively
+via the DTF API (WixToolset.Dtf.WindowsInstaller) — no WiX Toolset or
+`msiexec` dependency at build time.
+
+sbin-installer processes MSIs via the same DTF API in-process, providing
+better error handling and progress callbacks than shell-out to `msiexec.exe`.
+
+**What's inside a cimipkg-built MSI:**
+
+| MSI feature | Detail |
+|---|---|
+| **Payload files** | Embedded in a compressed CAB archive inside the MSI |
+| **PowerShell scripts** | Compiled to silent VBScript custom actions with pwsh 7 runtime detection (falls back to powershell.exe 5.1) |
+| **build-info.yaml** | Serialized into the `CIMIAN_PKG_BUILD_INFO` MSI property for metadata round-trip |
+| **UpgradeCode** | Deterministic UUID v5 derived from `product.identifier` — stable across versions, enables automatic upgrade |
+| **File versioning** | PE FileVersion extracted from binaries and stamped in the MSI File table; unversioned files get a synthetic version from the package version so every build overwrites on-disk files |
+| **Signing** | Authenticode-signed via `signtool` if a certificate is configured |
+
+**How sbin-installer processes MSIs:**
+
+1. Reads `ProductName`, `ProductVersion`, `UpgradeCode` from the MSI property table
+2. Detects conflicting products (by UpgradeCode or display name) — handles WiX-to-cimipkg transitions
+3. Installs the new MSI silently (`ALLUSERS=1`, `REBOOT=ReallySuppress`)
+4. If conflicts were removed, runs a repair pass (`REINSTALL=ALL REINSTALLMODE=amus`) to restore files with different component GUIDs
+5. Logs to `%TEMP%\cimian_msi_*.log`
+
 ### .nupkg Format (NuGet/Chocolatey)
 
-A `.nupkg` file is a ZIP archive following the NuGet package specification, commonly used by Chocolatey:
+A `.nupkg` file is a ZIP archive following the NuGet package specification,
+commonly used by Chocolatey. Build with `cimipkg --nupkg <project>`.
 
 ```
 package.nupkg
@@ -41,20 +72,27 @@ package.nupkg
 ├── package.nuspec
 ├── _rels/
 │   └── .rels
-├── payload/
-│   └── example.txt
-├── lib/
-│   └── net45/
-│       └── application.exe
 └── tools/
-    ├── chocolateyInstall.ps1
-    ├── chocolateyBeforeInstall.ps1
-    └── chocolateyUninstall.ps1
+    ├── chocolateyInstall.ps1         # Payload copy + postinstall scripts
+    ├── chocolateyBeforeModify.ps1    # Preinstall scripts (runs before upgrade/uninstall)
+    ├── chocolateyUninstall.ps1       # Uninstall script
+    └── payload/
+        └── example.txt
 ```
 
-### .pkg Format (cimipkg)
+**Chocolatey limitation:** `chocolateyBeforeModify.ps1` only fires when an
+existing package is being upgraded or uninstalled — not on a fresh install.
+sbin-installer does not have this limitation and runs `chocolateyBeforeModify.ps1`
+unconditionally before every install.
 
-A `.pkg` file is a ZIP archive created by [cimipkg](https://github.com/windowsadmins/cimian-pkg) with a specific structure designed for simple, deterministic installations:
+### .pkg Format (Legacy — deprecated)
+
+> **Note:** The `.pkg` format is deprecated. New packages should use `.msi`
+> (the default). sbin-installer continues to support `.pkg` for backward
+> compatibility, but no new features will be added to the `.pkg` code path.
+> Build with `cimipkg --pkg <project>` if you still need it.
+
+A `.pkg` file is a ZIP archive created by [cimipkg](https://github.com/windowsadmins/cimian-pkg):
 
 ```
 package.pkg
@@ -62,7 +100,8 @@ package.pkg
 │   └── example.txt
 ├── scripts/
 │   ├── preinstall.ps1
-│   └── postinstall.ps1
+│   ├── postinstall.ps1
+│   └── uninstall.ps1
 └── build-info.yaml
 ```
 
@@ -100,10 +139,18 @@ installer.exe osquery.5.19.0.nupkg
 
 ### Installation Process
 
-1. **Extract** the package (ZIP archive - either `.pkg` from cimipkg or `.nupkg` from NuGet/Chocolatey) to a temporary directory
-2. **Run pre-install script** (`scripts/preinstall.ps1` for .pkg or `tools/chocolateyBeforeInstall.ps1` for .nupkg)
-3. **Mirror payload** from `payload/` directory (supported in both .pkg and .nupkg formats)
-4. **Run post-install script** (`scripts/postinstall.ps1` for .pkg or `tools/chocolateyInstall.ps1` for .nupkg)
+**MSI packages:**
+1. Read metadata (ProductName, ProductVersion, UpgradeCode) from MSI property table
+2. Detect and remove conflicting products (by UpgradeCode or display name)
+3. Install silently via DTF in-process API
+4. If conflicts were removed, repair to restore files with different component GUIDs
+5. Custom actions (preinstall/postinstall/uninstall) run automatically as part of the MSI sequence
+
+**nupkg and pkg packages:**
+1. **Extract** the package to a temporary directory
+2. **Run pre-install script** (`chocolateyBeforeModify.ps1` for .nupkg or `scripts/preinstall.ps1` for .pkg)
+3. **Mirror payload** to the install location
+4. **Run post-install script** (`chocolateyInstall.ps1` for .nupkg or `scripts/postinstall.ps1` for .pkg)
 5. **Clean up** temporary extraction directory
 
 ## Usage
@@ -168,23 +215,31 @@ The `--target` parameter supports multiple formats:
 
 ## Package Creation with cimipkg
 
-Packages are created using [cimipkg](https://github.com/windowsadmins/cimian-pkg), a companion tool for building both `.pkg` and `.nupkg` packages:
+Packages are created using [cimipkg](https://github.com/windowsadmins/cimian-pkg).
+MSI is the default output format:
 
 ```bash
+# Build an MSI (default)
 cimipkg <project_directory>
+
+# Build a Chocolatey .nupkg
 cimipkg --nupkg <project_directory>
+
+# Build a legacy .pkg (deprecated)
+cimipkg --pkg <project_directory>
 ```
 
 ### Project Structure
 
 ```
 project/
-├── payload/
-│   └── example.txt
-├── scripts/
-│   ├── preinstall.ps1
-│   └── postinstall.ps1
-└── build-info.yaml
+├── build-info.yaml    # Package metadata (required)
+├── payload/           # Files to install (optional)
+├── .env               # Signing credentials + script variables (optional, gitignored)
+└── scripts/           # PowerShell install/uninstall scripts (optional)
+    ├── preinstall.ps1     # Runs before payload is copied
+    ├── postinstall.ps1    # Runs after payload is copied
+    └── uninstall.ps1      # Runs when the package is removed
 ```
 
 ### Example build-info.yaml
@@ -192,14 +247,20 @@ project/
 ```yaml
 product:
   name: MyApplication
-  version: 1.0.0
+  version: ${TIMESTAMP}
   identifier: com.company.myapplication
   developer: ACME Corp
   description: A sample application package
 install_location: C:\Program Files\MyApplication
 postinstall_action: none
-signing_certificate:
+signing_thumbprint: ${SIGNING_CERT_THUMBPRINT}
 ```
+
+Any `${NAME}` placeholder in build-info.yaml is resolved from built-in tokens
+(`TIMESTAMP`, `DATE`, `DATETIME`), a `.env` file, or process environment
+variables. This lets signing credentials stay out of source control. See the
+[cimipkg README](https://github.com/windowsadmins/cimian-pkg#placeholders) for
+the full placeholder reference.
 
 ## Security & Elevation
 
@@ -214,10 +275,12 @@ signing_certificate:
 |---------|------------|----------------|
 | Cache management | Complex | None |
 | Source repositories | Required | Direct file path |
-| Package format | `.nupkg` | `.pkg` (ZIP) + `.nupkg` support |
+| Package format | `.nupkg` | `.msi` (default) + `.nupkg` + `.pkg` (legacy) |
+| MSI support | Via `msiexec` shelling | Native DTF in-process API |
 | Dependency resolution | Full tree | Simple list |
-| Script support | tools\chocolatey*.ps1 | Yes (Supported via shim + scripts/*.ps1) |
+| Script support | tools\chocolatey*.ps1 | Yes (Supported via shim + scripts/*.ps1 + MSI custom actions) |
 | Chocolatey helpers | Native | Yes (Common helpers shimmed) |
+| BeforeModify on fresh install | No | Yes (always runs preinstall) |
 | Performance | Slow | Fast |
 | Complexity | High | Minimal |
 | Package database | Yes | No |
