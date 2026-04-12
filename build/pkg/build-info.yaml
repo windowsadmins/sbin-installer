@@ -1,9 +1,9 @@
 product:
-  name: installer
+  name: SbinInstaller
   version: "{{VERSION}}"
   identifier: com.github.windowsadmins.sbin-installer
   developer: Windows Admins Open Source
-  description: A lightweight .pkg installer for Windows, inspired by macOS /usr/sbin/installer
+  description: A lightweight package installer for Windows, inspired by macOS /usr/sbin/installer
   architecture: "{{ARCHITECTURE}}"
 install_location: 'C:\Program Files\sbin'
 postinstall_action: script

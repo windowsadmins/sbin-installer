@@ -27,6 +27,21 @@ public class MsiInstaller
         var logs = new List<string>();
         var conflicts = new List<ConflictingProduct>();
 
+        // Resolve to an absolute backslash path. Windows Installer's MsiInstallProduct
+        // requires an absolute path and doesn't accept forward slashes or relative
+        // paths — passing either produces a generic ERROR_FILE_NOT_FOUND that
+        // masks the real cause. Path.GetFullPath normalizes both at once.
+        try
+        {
+            msiPath = Path.GetFullPath(msiPath);
+        }
+        catch (Exception ex)
+        {
+            result.Message = $"Invalid MSI path '{msiPath}': {ex.Message}";
+            result.ExitCode = 1;
+            return result;
+        }
+
         if (!File.Exists(msiPath))
         {
             result.Message = $"MSI file not found: {msiPath}";
@@ -164,9 +179,48 @@ public class MsiInstaller
         var result = new InstallResult();
         var logs = new List<string>();
 
+        // Reject malformed product codes up-front so a later "already uninstalled"
+        // shortcut can't mask a typo or garbage input. Windows Installer product
+        // codes are braced GUIDs: {XXXXXXXX-XXXX-XXXX-XXXX-XXXXXXXXXXXX}.
+        if (string.IsNullOrWhiteSpace(productCode) ||
+            !System.Text.RegularExpressions.Regex.IsMatch(
+                productCode,
+                @"^\{[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}\}$"))
+        {
+            result.Message = $"Invalid product code format: '{productCode}' (expected braced GUID)";
+            result.ExitCode = 1;
+            result.Logs = logs;
+            return result;
+        }
+
         try
         {
             logs.Add($"Uninstalling product: {productCode}");
+
+            // If the product is already absent (e.g. Windows Installer's own
+            // RemoveExistingProducts already removed it during a major upgrade),
+            // skip the ConfigureProduct call so we don't surface a 1605 error.
+            try
+            {
+                var existing = new ProductInstallation(productCode);
+                if (!existing.IsInstalled)
+                {
+                    logs.Add($"Product {productCode} is already uninstalled");
+                    result.Success = true;
+                    result.ExitCode = 0;
+                    result.Logs = logs;
+                    return result;
+                }
+            }
+            catch (ArgumentException)
+            {
+                // Valid-format GUID that Windows Installer doesn't recognize — treat as absent
+                logs.Add($"Product {productCode} not found (already uninstalled)");
+                result.Success = true;
+                result.ExitCode = 0;
+                result.Logs = logs;
+                return result;
+            }
 
             Installer.SetInternalUI(InstallUIOptions.Silent);
             Installer.ConfigureProduct(productCode, 0, InstallState.Absent,
@@ -178,6 +232,18 @@ public class MsiInstaller
         }
         catch (InstallerException ex)
         {
+            // ERROR_UNKNOWN_PRODUCT (1605): product wasn't installed in the first place.
+            // This can happen if a major upgrade already removed it between our
+            // ProductInstallation check and the ConfigureProduct call.
+            if (ex.ErrorCode == 1605)
+            {
+                logs.Add($"Product {productCode} is no longer installed — treating as removed");
+                result.Success = true;
+                result.ExitCode = 0;
+                result.Logs = logs;
+                return result;
+            }
+
             logs.Add($"MSI uninstall failed: {ex.Message}");
             result.Message = ex.Message;
             result.ExitCode = ex.ErrorCode;
@@ -207,6 +273,31 @@ public class MsiInstaller
         if (string.IsNullOrEmpty(productName) || productName == "Unknown")
             return conflicts;
 
+        // Build a set of products that share our new UpgradeCode. Windows Installer's
+        // own RemoveExistingProducts action will clean those up during a major upgrade,
+        // so we must exclude them from our cross-product conflict list — otherwise we
+        // end up calling ConfigureProduct on an already-removed product after the
+        // install completes, which surfaces as a misleading 1605 error.
+        var sameUpgradeCodeProducts = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        if (!string.IsNullOrEmpty(newUpgradeCode))
+        {
+            try
+            {
+                var upgradeCodeForQuery = newUpgradeCode.StartsWith("{")
+                    ? newUpgradeCode
+                    : "{" + newUpgradeCode + "}";
+                foreach (var related in ProductInstallation.GetRelatedProducts(upgradeCodeForQuery))
+                {
+                    sameUpgradeCodeProducts.Add(related.ProductCode);
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogDebug("GetRelatedProducts failed for {UpgradeCode}: {Error}",
+                    newUpgradeCode, ex.Message);
+            }
+        }
+
         try
         {
             foreach (var product in ProductInstallation.AllProducts)
@@ -214,18 +305,17 @@ public class MsiInstaller
                 try
                 {
                     var installedName = product.ProductName;
-                    var installedUpgradeCode = "";
-                    try { installedUpgradeCode = product["UpgradeCode"]?.ToString() ?? ""; } catch { }
 
                     if (string.IsNullOrEmpty(installedName))
                         continue;
 
-                    // Skip if same UpgradeCode -- MSI's own RemoveExistingProducts handles this
-                    if (!string.IsNullOrEmpty(newUpgradeCode) &&
-                        string.Equals(installedUpgradeCode, newUpgradeCode, StringComparison.OrdinalIgnoreCase))
+                    // Skip products sharing our UpgradeCode — Windows Installer handles them
+                    if (sameUpgradeCodeProducts.Contains(product.ProductCode))
                         continue;
 
-                    // Match by product name (handles cross-UpgradeCode conflicts)
+                    // Match by product name (handles cross-UpgradeCode conflicts like
+                    // the WiX→cimipkg transition where the product name stays the same
+                    // but the UpgradeCode changed)
                     if (string.Equals(installedName, productName, StringComparison.OrdinalIgnoreCase) ||
                         installedName.StartsWith(productName, StringComparison.OrdinalIgnoreCase))
                     {
