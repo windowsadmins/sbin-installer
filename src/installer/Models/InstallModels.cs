@@ -8,6 +8,7 @@ namespace SbinInstaller.Models;
 /// </summary>
 public enum PackageType
 {
+    // TODO(pkg-sunset): Remove PackageType.Pkg enum value
     /// <summary>
     /// Custom .pkg format with build-info.yaml
     /// </summary>
@@ -179,6 +180,7 @@ public class PackageInfo
             return false;
         }
 
+        // TODO(pkg-sunset): Remove .pkg path resolution logic
         // For .pkg packages, use install_location from build-info.yaml
         if (PackageType == PackageType.Pkg)
         {
@@ -223,6 +225,7 @@ public class PackageInfo
         return false;
     }
 
+    // TODO(pkg-sunset): Remove .pkg install location handling
     /// <summary>
     /// Get the installation location for copy-type packages
     /// For .pkg files, ONLY use install_location from build-info.yaml
