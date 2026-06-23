@@ -83,8 +83,21 @@ public class MsiInstaller
                 _logger.LogDebug("Could not pre-read MSI metadata: {Error}", ex.Message);
             }
 
-            // Find conflicting installations (don't remove yet -- remove after successful install)
+            // Find conflicting installations and remove them BEFORE installing.
+            // cimipkg MSIs already supersede same-UpgradeCode builds *inside* the install
+            // (RemoveExistingProducts via the Upgrade table); this external pass only catches
+            // legacy / different-UpgradeCode same-name products (e.g. a WiX-built predecessor).
+            // Removing them first means the new package's files are laid down LAST, so nothing
+            // a conflict's uninstall touched is left missing -- and we never run a REINSTALL
+            // repair pass, which trips Windows SecureRepair and aborts with 1603/1625 on managed
+            // clients (the source the repair validates against isn't on disk). The Windows
+            // Installer repair engine is deliberately never invoked here.
             conflicts = FindConflictingProducts(productName, upgradeCode, logs);
+            if (conflicts.Count > 0)
+            {
+                logs.Add($"Removing {conflicts.Count} conflicting product(s) before install...");
+                RemoveProducts(conflicts, logs);
+            }
 
             // Configure silent UI
             Installer.SetInternalUI(InstallUIOptions.Silent);
@@ -110,27 +123,15 @@ public class MsiInstaller
                 InstallLogModes.ActionStart | InstallLogModes.Error |
                 InstallLogModes.Warning | InstallLogModes.Progress);
 
-            // Build property string
+            // Build property string. Deliberately NO REINSTALL/REINSTALLMODE: a plain install
+            // lets the cimipkg MSI run its own sequence (scripts every install via custom
+            // actions, payload overwrite via synthetic File.Version, supersede via the Upgrade
+            // table) without ever invoking the Windows Installer repair/SecureRepair path.
             var properties = "REBOOT=ReallySuppress ALLUSERS=1 MSIRESTARTMANAGERCONTROL=Disable";
 
-            // Install
+            // Install (conflicts, if any, were already removed above).
             logs.Add("Installing...");
             Installer.InstallProduct(msiPath, properties);
-
-            // Post-install: remove conflicting products, then repair to restore any
-            // files the old uninstall may have deleted (different component GUIDs)
-            if (conflicts.Count > 0)
-            {
-                logs.Add($"Removing {conflicts.Count} conflicting product(s) after successful install...");
-                RemoveProducts(conflicts, logs);
-
-                var repaired = RepairInstallation(msiPath, logs);
-                if (!repaired)
-                {
-                    logs.Add("Warning: repair did not succeed; some files may need manual restoration");
-                    _logger.LogWarning("Post-conflict repair failed for {Product}", productName);
-                }
-            }
 
             logs.Add($"Installation completed successfully: {productName} {productVersion}");
             result.Success = true;
@@ -150,14 +151,7 @@ public class MsiInstaller
                 result.Success = true;
                 result.RestartAction = "restart";
                 result.ExitCode = 0;
-
-                // Still handle conflicts on 3010 (install succeeded)
-                if (conflicts.Count > 0)
-                {
-                    logs.Add($"Removing {conflicts.Count} conflicting product(s) after install...");
-                    RemoveProducts(conflicts, logs);
-                    RepairInstallation(msiPath, logs);
-                }
+                // Conflicts (if any) were already removed before the install above.
             }
         }
         catch (Exception ex)
@@ -360,46 +354,6 @@ public class MsiInstaller
                 _logger.LogWarning("Failed to remove conflicting product {Name}: {Error}",
                     conflict.ProductName, uninstallResult.Message);
             }
-        }
-    }
-
-    /// <summary>
-    /// Repair a newly installed MSI to restore files that may have been removed
-    /// when conflicting products (with different component GUIDs) were uninstalled.
-    /// </summary>
-    private bool RepairInstallation(string msiPath, List<string> logs)
-    {
-        try
-        {
-            logs.Add("Repairing installation to restore files removed during conflict cleanup...");
-            _logger.LogInformation("Running repair on {Msi} after conflict removal", Path.GetFileName(msiPath));
-
-            Installer.SetInternalUI(InstallUIOptions.Silent);
-            Installer.InstallProduct(msiPath,
-                "REINSTALL=ALL REINSTALLMODE=amus REBOOT=ReallySuppress ALLUSERS=1");
-
-            logs.Add("Repair completed successfully");
-            return true;
-        }
-        catch (InstallerException ex)
-        {
-            if (ex.ErrorCode == 3010)
-            {
-                logs.Add("Repair completed (reboot required)");
-                return true;
-            }
-
-            logs.Add($"Warning: repair failed ({ex.Message}), installation may have missing files");
-            _logger.LogWarning("Repair failed for {Msi}: {Error} (code {Code})",
-                Path.GetFileName(msiPath), ex.Message, ex.ErrorCode);
-            return false;
-        }
-        catch (Exception ex)
-        {
-            logs.Add($"Warning: repair failed unexpectedly ({ex.Message})");
-            _logger.LogWarning("Unexpected repair failure for {Msi}: {Error}",
-                Path.GetFileName(msiPath), ex.Message);
-            return false;
         }
     }
 
