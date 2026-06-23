@@ -115,12 +115,14 @@ public class MsiInstaller
             // SecureRepair and aborts with 1603/1625 on managed clients. The repair engine is
             // deliberately never invoked.
             //
-            // Self-sufficient by design: removes BOTH same-UpgradeCode predecessors (older
-            // builds of this product, except the exact ProductCode we're about to install) AND
-            // different-UpgradeCode same-name products (e.g. a WiX-built predecessor). It does
-            // NOT rely on the MSI carrying its own Upgrade table -- when the MSI also supersedes
-            // (cimipkg), the in-MSI RemoveExistingProducts simply finds nothing left to do.
-            // installer and cimipkg each work standalone; together they overlap harmlessly.
+            // Self-sufficient by design: removes BOTH other installed versions sharing this
+            // UpgradeCode (any version of this product, except the exact ProductCode we're
+            // about to install -- no version gating, so a deliberate downgrade still installs,
+            // matching cimipkg's most-recent-install-wins supersede) AND different-UpgradeCode
+            // same-name products (e.g. a WiX-built predecessor). It does NOT rely on the MSI
+            // carrying its own Upgrade table -- when the MSI also supersedes (cimipkg), the
+            // in-MSI RemoveExistingProducts simply finds nothing left to do. installer and
+            // cimipkg each work standalone; together they overlap harmlessly.
             conflicts = FindConflictingProducts(productName, upgradeCode, productCode, logs);
             if (conflicts.Count > 0)
             {
@@ -263,7 +265,8 @@ public class MsiInstaller
 
     /// <summary>
     /// Find existing installations that conflict with the MSI we're about to install:
-    ///   - same-UpgradeCode predecessors (older builds of this same product), and
+    ///   - other installed versions sharing this UpgradeCode (any version of this same
+    ///     product -- not version-compared), and
     ///   - different-UpgradeCode products with the same (or prefix) ProductName
     ///     (e.g. a WiX-built predecessor whose UpgradeCode changed).
     /// The exact ProductCode we're installing is never listed -- a same-version re-run is
@@ -280,12 +283,13 @@ public class MsiInstaller
         if (!string.IsNullOrEmpty(newProductCode))
             seen.Add(newProductCode);
 
-        // 1) Same-UpgradeCode predecessors -- unambiguously older builds of this same
-        //    product. Remove them ourselves rather than relying on the MSI's own
-        //    RemoveExistingProducts (which only runs if the MSI carries an Upgrade table).
-        //    Because the caller removes them BEFORE the install, an in-MSI
-        //    RemoveExistingProducts (if present) just finds nothing left -- no double-remove,
-        //    no misleading 1605.
+        // 1) Other installed versions sharing this UpgradeCode -- the same product, any
+        //    version (we do NOT version-compare; matching cimipkg's most-recent-install-wins
+        //    supersede, a deliberate downgrade still installs). Remove them ourselves rather
+        //    than relying on the MSI's own RemoveExistingProducts (which only runs if the MSI
+        //    carries an Upgrade table). Because the caller removes them BEFORE the install, an
+        //    in-MSI RemoveExistingProducts (if present) just finds nothing left -- no
+        //    double-remove, no misleading 1605.
         if (!string.IsNullOrEmpty(newUpgradeCode))
         {
             try
@@ -300,8 +304,8 @@ public class MsiInstaller
                     string name;
                     try { name = string.IsNullOrEmpty(related.ProductName) ? productName : related.ProductName; }
                     catch { name = productName; }
-                    logs.Add($"Found same-UpgradeCode predecessor: {name} ({related.ProductCode})");
-                    _logger.LogInformation("Same-UpgradeCode predecessor: {Name} ({Code})",
+                    logs.Add($"Found related product (same UpgradeCode): {name} ({related.ProductCode})");
+                    _logger.LogInformation("Related product (same UpgradeCode): {Name} ({Code})",
                         name, related.ProductCode);
                     conflicts.Add(new ConflictingProduct(related.ProductCode, name));
                 }
