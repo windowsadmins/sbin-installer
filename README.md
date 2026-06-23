@@ -63,7 +63,7 @@ providing better error handling, progress callbacks, and conflict resolution
 than shell-out to `msiexec.exe`. It can install any standard MSI, but for
 third-party or non-cimipkg MSIs you're generally better off using `msiexec`
 directly — sbin-installer's upgrade logic (UpgradeCode detection, conflict
-removal, repair pass) is tuned for the conventions cimipkg embeds.
+removal) is tuned for the conventions cimipkg embeds.
 
 **What's inside a cimipkg-built MSI:**
 
@@ -79,10 +79,9 @@ removal, repair pass) is tuned for the conventions cimipkg embeds.
 **How sbin-installer processes MSIs:**
 
 1. Reads `ProductName`, `ProductVersion`, `UpgradeCode` from the MSI property table
-2. Detects conflicting products (by UpgradeCode or display name) — handles WiX-to-cimipkg transitions
-3. Installs the new MSI silently (`ALLUSERS=1`, `REBOOT=ReallySuppress`)
-4. If conflicts were removed, runs a repair pass (`REINSTALL=ALL REINSTALLMODE=amus`) to restore files with different component GUIDs
-5. Logs to `%TEMP%\cimian_msi_*.log`
+2. Detects conflicting products (by UpgradeCode or display name) — handles WiX-to-cimipkg transitions — and removes them **before** installing, so the new package's files are laid down last
+3. Installs the new MSI silently via the in-process DTF API (`ALLUSERS=1`, `REBOOT=ReallySuppress`). **No `REINSTALL`/repair pass** — a plain install lets the cimipkg MSI run its own sequence (scripts via custom actions, payload overwrite via synthetic File.Version, supersede via the Upgrade table). Invoking the repair engine would trip Windows **SecureRepair** and abort with 1603/1625 on managed clients, so it is deliberately never used.
+4. Logs to `%TEMP%\cimian_msi_*.log`
 
 ### .nupkg Format (NuGet/Chocolatey)
 
@@ -144,10 +143,9 @@ installer.exe osquery.5.19.0.nupkg
 
 **MSI packages:**
 1. Read metadata (ProductName, ProductVersion, UpgradeCode) from MSI property table
-2. Detect and remove conflicting products (by UpgradeCode or display name)
-3. Install silently via DTF in-process API
-4. If conflicts were removed, repair to restore files with different component GUIDs
-5. Custom actions (preinstall/postinstall/uninstall) run automatically as part of the MSI sequence
+2. Detect and remove conflicting products (by UpgradeCode or display name) **before** installing
+3. Install silently via the DTF in-process API — plain install, **no `REINSTALL`/repair pass**
+4. Custom actions (preinstall/postinstall/uninstall) run automatically as part of the MSI sequence
 
 **nupkg packages:**
 1. **Extract** the package to a temporary directory
