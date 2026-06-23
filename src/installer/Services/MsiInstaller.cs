@@ -57,6 +57,7 @@ public class MsiInstaller
             string productName = "Unknown";
             string productVersion = "";
             string upgradeCode = "";
+            string productCode = "";
             string installLocation = "";
             try
             {
@@ -67,6 +68,8 @@ public class MsiInstaller
                     "SELECT `Value` FROM `Property` WHERE `Property` = 'ProductVersion'")?.ToString() ?? "";
                 upgradeCode = db.ExecuteScalar(
                     "SELECT `Value` FROM `Property` WHERE `Property` = 'UpgradeCode'")?.ToString() ?? "";
+                productCode = db.ExecuteScalar(
+                    "SELECT `Value` FROM `Property` WHERE `Property` = 'ProductCode'")?.ToString() ?? "";
                 // ARPINSTALLLOCATION or custom property for install path
                 installLocation = db.ExecuteScalar(
                     "SELECT `Value` FROM `Property` WHERE `Property` = 'ARPINSTALLLOCATION'")?.ToString() ?? "";
@@ -83,26 +86,9 @@ public class MsiInstaller
                 _logger.LogDebug("Could not pre-read MSI metadata: {Error}", ex.Message);
             }
 
-            // Find conflicting installations and remove them BEFORE installing.
-            // cimipkg MSIs already supersede same-UpgradeCode builds *inside* the install
-            // (RemoveExistingProducts via the Upgrade table); this external pass only catches
-            // legacy / different-UpgradeCode same-name products (e.g. a WiX-built predecessor).
-            // Removing them first means the new package's files are laid down LAST, so nothing
-            // a conflict's uninstall touched is left missing -- and we never run a REINSTALL
-            // repair pass, which trips Windows SecureRepair and aborts with 1603/1625 on managed
-            // clients (the source the repair validates against isn't on disk). The Windows
-            // Installer repair engine is deliberately never invoked here.
-            conflicts = FindConflictingProducts(productName, upgradeCode, logs);
-            if (conflicts.Count > 0)
-            {
-                logs.Add($"Removing {conflicts.Count} conflicting product(s) before install...");
-                RemoveProducts(conflicts, logs);
-            }
-
-            // Configure silent UI
+            // Configure silent UI + verbose logging FIRST, so the uninstall activity from
+            // removing conflicting products below lands in the same %TEMP%\cimian_msi_*.log.
             Installer.SetInternalUI(InstallUIOptions.Silent);
-
-            // Set up logging
             var logPath = Path.Combine(
                 Path.GetTempPath(),
                 $"cimian_msi_{Path.GetFileNameWithoutExtension(msiPath)}_{DateTime.Now:yyyyMMdd_HHmmss}.log");
@@ -122,6 +108,25 @@ public class MsiInstaller
             Installer.SetExternalUI(messageHandler,
                 InstallLogModes.ActionStart | InstallLogModes.Error |
                 InstallLogModes.Warning | InstallLogModes.Progress);
+
+            // Find conflicting installations and remove them BEFORE installing, so the new
+            // package's files are laid down LAST (nothing a conflict's uninstall touched is
+            // left missing) and we never run a REINSTALL repair pass -- that trips Windows
+            // SecureRepair and aborts with 1603/1625 on managed clients. The repair engine is
+            // deliberately never invoked.
+            //
+            // Self-sufficient by design: removes BOTH same-UpgradeCode predecessors (older
+            // builds of this product, except the exact ProductCode we're about to install) AND
+            // different-UpgradeCode same-name products (e.g. a WiX-built predecessor). It does
+            // NOT rely on the MSI carrying its own Upgrade table -- when the MSI also supersedes
+            // (cimipkg), the in-MSI RemoveExistingProducts simply finds nothing left to do.
+            // installer and cimipkg each work standalone; together they overlap harmlessly.
+            conflicts = FindConflictingProducts(productName, upgradeCode, productCode, logs);
+            if (conflicts.Count > 0)
+            {
+                logs.Add($"Removing {conflicts.Count} conflicting product(s) before install...");
+                RemoveProducts(conflicts, logs);
+            }
 
             // Build property string. Deliberately NO REINSTALL/REINSTALLMODE: a plain install
             // lets the cimipkg MSI run its own sequence (scripts every install via custom
@@ -149,6 +154,8 @@ public class MsiInstaller
             {
                 logs.Add("Reboot required to complete installation");
                 result.Success = true;
+                // Overwrite the failure message set above -- this is a successful install.
+                result.Message = "Installation completed successfully (reboot required)";
                 result.RestartAction = "restart";
                 result.ExitCode = 0;
                 // Conflicts (if any) were already removed before the install above.
@@ -255,24 +262,30 @@ public class MsiInstaller
     }
 
     /// <summary>
-    /// Find any existing installations of the same product that would conflict.
-    /// Searches all installed MSI products by name to find conflicting
-    /// installations regardless of UpgradeCode (handles WiX-to-cimipkg transitions).
-    /// Does NOT remove them -- caller decides when to remove.
+    /// Find existing installations that conflict with the MSI we're about to install:
+    ///   - same-UpgradeCode predecessors (older builds of this same product), and
+    ///   - different-UpgradeCode products with the same (or prefix) ProductName
+    ///     (e.g. a WiX-built predecessor whose UpgradeCode changed).
+    /// The exact ProductCode we're installing is never listed -- a same-version re-run is
+    /// left to the install's own maintenance, not uninstalled+reinstalled. Does NOT remove
+    /// them; the caller removes them BEFORE installing. Handling same-UpgradeCode ourselves
+    /// is what makes installer self-sufficient: it never relies on the MSI carrying its own
+    /// Upgrade table. When the MSI does (cimipkg), the two simply overlap harmlessly.
     /// </summary>
-    private List<ConflictingProduct> FindConflictingProducts(string productName, string newUpgradeCode, List<string> logs)
+    private List<ConflictingProduct> FindConflictingProducts(string productName, string newUpgradeCode, string newProductCode, List<string> logs)
     {
         var conflicts = new List<ConflictingProduct>();
+        // Never touch the exact product we're about to install (same-version re-run).
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        if (!string.IsNullOrEmpty(newProductCode))
+            seen.Add(newProductCode);
 
-        if (string.IsNullOrEmpty(productName) || productName == "Unknown")
-            return conflicts;
-
-        // Build a set of products that share our new UpgradeCode. Windows Installer's
-        // own RemoveExistingProducts action will clean those up during a major upgrade,
-        // so we must exclude them from our cross-product conflict list — otherwise we
-        // end up calling ConfigureProduct on an already-removed product after the
-        // install completes, which surfaces as a misleading 1605 error.
-        var sameUpgradeCodeProducts = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        // 1) Same-UpgradeCode predecessors -- unambiguously older builds of this same
+        //    product. Remove them ourselves rather than relying on the MSI's own
+        //    RemoveExistingProducts (which only runs if the MSI carries an Upgrade table).
+        //    Because the caller removes them BEFORE the install, an in-MSI
+        //    RemoveExistingProducts (if present) just finds nothing left -- no double-remove,
+        //    no misleading 1605.
         if (!string.IsNullOrEmpty(newUpgradeCode))
         {
             try
@@ -282,7 +295,15 @@ public class MsiInstaller
                     : "{" + newUpgradeCode + "}";
                 foreach (var related in ProductInstallation.GetRelatedProducts(upgradeCodeForQuery))
                 {
-                    sameUpgradeCodeProducts.Add(related.ProductCode);
+                    if (!seen.Add(related.ProductCode))
+                        continue;
+                    string name;
+                    try { name = string.IsNullOrEmpty(related.ProductName) ? productName : related.ProductName; }
+                    catch { name = productName; }
+                    logs.Add($"Found same-UpgradeCode predecessor: {name} ({related.ProductCode})");
+                    _logger.LogInformation("Same-UpgradeCode predecessor: {Name} ({Code})",
+                        name, related.ProductCode);
+                    conflicts.Add(new ConflictingProduct(related.ProductCode, name));
                 }
             }
             catch (Exception ex)
@@ -292,42 +313,43 @@ public class MsiInstaller
             }
         }
 
-        try
+        // 2) Different-UpgradeCode products with a matching name (WiX->cimipkg transitions,
+        //    where the product name stays the same but the UpgradeCode changed).
+        if (!string.IsNullOrEmpty(productName) && productName != "Unknown")
         {
-            foreach (var product in ProductInstallation.AllProducts)
+            try
             {
-                try
+                foreach (var product in ProductInstallation.AllProducts)
                 {
-                    var installedName = product.ProductName;
-
-                    if (string.IsNullOrEmpty(installedName))
-                        continue;
-
-                    // Skip products sharing our UpgradeCode — Windows Installer handles them
-                    if (sameUpgradeCodeProducts.Contains(product.ProductCode))
-                        continue;
-
-                    // Match by product name (handles cross-UpgradeCode conflicts like
-                    // the WiX→cimipkg transition where the product name stays the same
-                    // but the UpgradeCode changed)
-                    if (string.Equals(installedName, productName, StringComparison.OrdinalIgnoreCase) ||
-                        installedName.StartsWith(productName, StringComparison.OrdinalIgnoreCase))
+                    try
                     {
-                        logs.Add($"Found conflicting installation: {installedName} ({product.ProductCode})");
-                        _logger.LogInformation("Found conflicting product: {Name} ({Code})",
-                            installedName, product.ProductCode);
-                        conflicts.Add(new ConflictingProduct(product.ProductCode, installedName));
+                        if (seen.Contains(product.ProductCode))
+                            continue;
+
+                        var installedName = product.ProductName;
+                        if (string.IsNullOrEmpty(installedName))
+                            continue;
+
+                        if (string.Equals(installedName, productName, StringComparison.OrdinalIgnoreCase) ||
+                            installedName.StartsWith(productName, StringComparison.OrdinalIgnoreCase))
+                        {
+                            seen.Add(product.ProductCode);
+                            logs.Add($"Found conflicting installation: {installedName} ({product.ProductCode})");
+                            _logger.LogInformation("Found conflicting product: {Name} ({Code})",
+                                installedName, product.ProductCode);
+                            conflicts.Add(new ConflictingProduct(product.ProductCode, installedName));
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.LogDebug("Could not inspect product: {Error}", ex.Message);
                     }
                 }
-                catch (Exception ex)
-                {
-                    _logger.LogDebug("Could not inspect product: {Error}", ex.Message);
-                }
             }
-        }
-        catch (Exception ex)
-        {
-            _logger.LogDebug("Could not enumerate installed products: {Error}", ex.Message);
+            catch (Exception ex)
+            {
+                _logger.LogDebug("Could not enumerate installed products: {Error}", ex.Message);
+            }
         }
 
         return conflicts;
