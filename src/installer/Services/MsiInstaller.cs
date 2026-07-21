@@ -49,6 +49,8 @@ public class MsiInstaller
             return result;
         }
 
+        string logPath = string.Empty;
+
         try
         {
             logs.Add($"Installing MSI: {Path.GetFileName(msiPath)}");
@@ -89,7 +91,7 @@ public class MsiInstaller
             // Configure silent UI + verbose logging FIRST, so the uninstall activity from
             // removing conflicting products below lands in the same %TEMP%\cimian_msi_*.log.
             Installer.SetInternalUI(InstallUIOptions.Silent);
-            var logPath = Path.Combine(
+            logPath = Path.Combine(
                 Path.GetTempPath(),
                 $"cimian_msi_{Path.GetFileNameWithoutExtension(msiPath)}_{DateTime.Now:yyyyMMdd_HHmmss}.log");
             Installer.EnableLog(InstallLogModes.Verbose, logPath);
@@ -162,6 +164,21 @@ public class MsiInstaller
                 result.ExitCode = 0;
                 // Conflicts (if any) were already removed before the install above.
             }
+            else
+            {
+                // A bare 1603 is undiagnosable from the caller's log. The verbose MSI
+                // log enabled above holds the actual cause -- the failing action, any
+                // LaunchCondition text, and the CimianPre/Postinstall script output
+                // that cimipkg CAs stream in via Session.Log. Surface those lines here
+                // so the managing client's log answers "why" without a per-box hunt.
+                var diagnostics = ExtractFailureDiagnostics(logPath);
+                if (diagnostics.Count > 0)
+                {
+                    logs.Add("--- failure diagnostics from MSI log ---");
+                    logs.AddRange(diagnostics);
+                    result.Message = $"MSI installation failed: {ex.Message} | {diagnostics[^1]}";
+                }
+            }
         }
         catch (Exception ex)
         {
@@ -172,6 +189,75 @@ public class MsiInstaller
 
         result.Logs = logs;
         return result;
+    }
+
+    /// <summary>
+    /// Pulls the lines that explain a failed install out of the verbose MSI log:
+    /// custom-action script output (the "CimianXxx | ..." lines cimipkg CAs write
+    /// via Session.Log), explicit script-failure markers, LaunchCondition text,
+    /// and the failing action ("Return value 3") with the action that produced it.
+    /// Returns at most a few dozen lines; never throws.
+    /// </summary>
+    private List<string> ExtractFailureDiagnostics(string logPath)
+    {
+        var diagnostics = new List<string>();
+        const int maxLines = 40;
+
+        try
+        {
+            if (!File.Exists(logPath))
+            {
+                return diagnostics;
+            }
+
+            // The Windows Installer engine may still hold the log open — share fully.
+            using var stream = new FileStream(
+                logPath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+            using var reader = new StreamReader(stream, detectEncodingFromByteOrderMarks: true);
+
+            string? lastActionStart = null;
+            string? line;
+            while ((line = reader.ReadLine()) != null && diagnostics.Count < maxLines)
+            {
+                if (line.Contains("Action start", StringComparison.OrdinalIgnoreCase))
+                {
+                    lastActionStart = line;
+                    continue;
+                }
+
+                // Custom-action script output and failure markers (cimipkg CAs).
+                if (line.Contains("CimianPreinstall", StringComparison.OrdinalIgnoreCase) ||
+                    line.Contains("CimianPostinstall", StringComparison.OrdinalIgnoreCase) ||
+                    line.Contains("CimianUninstall", StringComparison.OrdinalIgnoreCase))
+                {
+                    diagnostics.Add(line.Trim());
+                    continue;
+                }
+
+                // A LaunchCondition rejection logs its Description verbatim.
+                if (line.Contains("pending Windows reboot", StringComparison.OrdinalIgnoreCase))
+                {
+                    diagnostics.Add(line.Trim());
+                    continue;
+                }
+
+                // The action that aborted the install.
+                if (line.Contains("Return value 3", StringComparison.OrdinalIgnoreCase))
+                {
+                    if (lastActionStart != null)
+                    {
+                        diagnostics.Add(lastActionStart.Trim());
+                    }
+                    diagnostics.Add(line.Trim());
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug("Could not extract MSI failure diagnostics: {Error}", ex.Message);
+        }
+
+        return diagnostics;
     }
 
     /// <summary>
