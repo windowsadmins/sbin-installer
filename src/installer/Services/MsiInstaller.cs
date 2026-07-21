@@ -138,9 +138,29 @@ public class MsiInstaller
             // table) without ever invoking the Windows Installer repair/SecureRepair path.
             var properties = "REBOOT=ReallySuppress ALLUSERS=1 MSIRESTARTMANAGERCONTROL=Disable";
 
+            // Serialize behind any other MSI transaction (Intune, another agent, a
+            // user-launched installer). Windows Installer allows one execute sequence
+            // at a time machine-wide; starting anyway fails with 1618. Waiting here
+            // makes concurrent installers a queue, not an error.
+            if (!WaitForWindowsInstallerIdle(600, logs))
+            {
+                logs.Add("Windows Installer still busy after 10 minutes; attempting install anyway");
+            }
+
             // Install (conflicts, if any, were already removed above).
             logs.Add("Installing...");
-            Installer.InstallProduct(msiPath, properties);
+            try
+            {
+                Installer.InstallProduct(msiPath, properties);
+            }
+            catch (InstallerException iex) when (iex.ErrorCode == 1618)
+            {
+                // Lost a race with an install that started after our idle check.
+                // Wait for it and retry once before giving up.
+                logs.Add("Another installation started concurrently (1618); waiting to retry once...");
+                WaitForWindowsInstallerIdle(600, logs);
+                Installer.InstallProduct(msiPath, properties);
+            }
 
             logs.Add($"Installation completed successfully: {productName} {productVersion}");
             result.Success = true;
@@ -189,6 +209,60 @@ public class MsiInstaller
 
         result.Logs = logs;
         return result;
+    }
+
+    /// <summary>
+    /// Waits until no MSI execute sequence is running machine-wide, by probing the
+    /// Global\_MSIExecute mutex the Windows Installer service holds for the duration
+    /// of any install. Best-effort: if the mutex can't be opened or inspected the
+    /// installer is treated as idle so a permissions quirk never blocks an install.
+    /// Returns true once idle, false if the wait timed out.
+    /// </summary>
+    private bool WaitForWindowsInstallerIdle(int maxWaitSeconds, List<string> logs)
+    {
+        var deadline = DateTime.UtcNow.AddSeconds(maxWaitSeconds);
+        var logged = false;
+        while (true)
+        {
+            try
+            {
+                if (!System.Threading.Mutex.TryOpenExisting(@"Global\_MSIExecute", out var mutex))
+                {
+                    return true; // mutex absent => no install executing
+                }
+                using (mutex)
+                {
+                    var acquired = false;
+                    try
+                    {
+                        acquired = mutex.WaitOne(0);
+                        if (acquired) return true;
+                    }
+                    catch (System.Threading.AbandonedMutexException)
+                    {
+                        return true; // previous owner died; installer is idle
+                    }
+                    finally
+                    {
+                        if (acquired) mutex.ReleaseMutex();
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogDebug("Could not inspect _MSIExecute mutex: {Error}", ex.Message);
+                return true;
+            }
+
+            if (DateTime.UtcNow >= deadline) return false;
+            if (!logged)
+            {
+                logs.Add("Windows Installer busy (another MSI transaction active) - waiting before installing");
+                _logger.LogInformation("Windows Installer busy - waiting for the active MSI transaction to finish");
+                logged = true;
+            }
+            System.Threading.Thread.Sleep(2000);
+        }
     }
 
     /// <summary>
