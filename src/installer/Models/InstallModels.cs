@@ -95,7 +95,7 @@ public class PackageInfo
             var name = title ?? id;
             if (!string.IsNullOrEmpty(name))
             {
-                // If it's a reverse domain style ID (like ca.emilycarru.winadmins.MayaReset), extract the last part
+                // If it's a reverse domain style ID (like com.example.tools.SampleTask), extract the last part
                 if (name.Contains('.') && !name.Contains(' '))
                 {
                     var parts = name.Split('.');
