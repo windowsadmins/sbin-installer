@@ -386,8 +386,27 @@ public class MsiInstaller
             }
 
             Installer.SetInternalUI(InstallUIOptions.Silent);
-            Installer.ConfigureProduct(productCode, 0, InstallState.Absent,
-                "REBOOT=ReallySuppress");
+
+            // Conflict cleanup uses this same uninstall path. Serialize it just like
+            // installs so an unrelated MSI transaction cannot turn cleanup into 1618
+            // and leave the conflicting product behind.
+            if (!WaitForWindowsInstallerIdle(600, logs))
+            {
+                logs.Add("Windows Installer still busy after 10 minutes; attempting uninstall anyway");
+            }
+
+            try
+            {
+                Installer.ConfigureProduct(productCode, 0, InstallState.Absent,
+                    "REBOOT=ReallySuppress");
+            }
+            catch (InstallerException iex) when (iex.ErrorCode == 1618)
+            {
+                logs.Add("Another installation started concurrently (1618); waiting to retry uninstall once...");
+                WaitForWindowsInstallerIdle(600, logs);
+                Installer.ConfigureProduct(productCode, 0, InstallState.Absent,
+                    "REBOOT=ReallySuppress");
+            }
 
             logs.Add("Uninstall completed successfully");
             result.Success = true;
@@ -427,7 +446,7 @@ public class MsiInstaller
     /// Find existing installations that conflict with the MSI we're about to install:
     ///   - other installed versions sharing this UpgradeCode (any version of this same
     ///     product -- not version-compared), and
-    ///   - different-UpgradeCode products with the same (or prefix) ProductName
+    ///   - different-UpgradeCode products with the same ProductName
     ///     (e.g. a WiX-built predecessor whose UpgradeCode changed).
     /// The exact ProductCode we're installing is never listed -- a same-version re-run is
     /// left to the install's own maintenance, not uninstalled+reinstalled. Does NOT remove
@@ -494,8 +513,11 @@ public class MsiInstaller
                         if (string.IsNullOrEmpty(installedName))
                             continue;
 
-                        if (string.Equals(installedName, productName, StringComparison.OrdinalIgnoreCase) ||
-                            installedName.StartsWith(productName, StringComparison.OrdinalIgnoreCase))
+                        // A display-name prefix is not a product identity. For example,
+                        // "ManageUsers" and "ManageUsersPrefs" are separate packages;
+                        // treating the latter as a conflict would uninstall valid state.
+                        // Same-product renames are already handled safely by UpgradeCode.
+                        if (string.Equals(installedName, productName, StringComparison.OrdinalIgnoreCase))
                         {
                             seen.Add(product.ProductCode);
                             logs.Add($"Found conflicting installation: {installedName} ({product.ProductCode})");
