@@ -1,3 +1,4 @@
+using ManagedUtilities;
 using Microsoft.Extensions.Logging;
 using SbinInstaller.Models;
 using WixToolset.Dtf.WindowsInstaller;
@@ -10,11 +11,72 @@ namespace SbinInstaller.Services;
 /// </summary>
 public class MsiInstaller
 {
-    private readonly ILogger _logger;
+    /// <summary>
+    /// Sub-directory of the tool's log directory that holds the per-install verbose
+    /// Windows Installer logs. Resolves to ProgramData\ManagedUtilities\logs\sbin-installer
+    /// when the shared location is writable.
+    /// </summary>
+    public const string VerboseLogSubdirectory = "sbin-installer";
 
-    public MsiInstaller(ILogger logger)
+    /// <summary>File-name prefix of the verbose Windows Installer logs written per install.</summary>
+    public const string VerboseLogPrefix = "cimian_msi_";
+
+    private readonly ILogger _logger;
+    private readonly FileLog _fileLog;
+
+    public MsiInstaller(ILogger logger, FileLog fileLog)
     {
         _logger = logger;
+        _fileLog = fileLog;
+    }
+
+    /// <summary>Directory the verbose Windows Installer logs are written to.</summary>
+    public static string VerboseLogDirectory(FileLog fileLog) =>
+        Path.Combine(fileLog.DirectoryPath, VerboseLogSubdirectory);
+
+    /// <summary>
+    /// Deletes verbose Windows Installer logs older than <paramref name="maxAge"/>.
+    /// Bounded to <paramref name="maxDeletes"/> files per call and never throws, so a
+    /// slow disk or a permissions surprise cannot delay or fail an install.
+    /// </summary>
+    public static int PruneVerboseLogs(FileLog fileLog, TimeSpan maxAge, int maxDeletes = 500)
+    {
+        var deleted = 0;
+        try
+        {
+            var directory = VerboseLogDirectory(fileLog);
+            if (!Directory.Exists(directory))
+                return 0;
+
+            var cutoff = DateTime.UtcNow - maxAge;
+            foreach (var path in Directory.EnumerateFiles(directory, VerboseLogPrefix + "*.log"))
+            {
+                if (deleted >= maxDeletes)
+                    break;
+
+                try
+                {
+                    if (File.GetLastWriteTimeUtc(path) < cutoff)
+                    {
+                        File.Delete(path);
+                        deleted++;
+                    }
+                }
+                catch (Exception ex)
+                {
+                    fileLog.Debug($"Could not delete old MSI log {path}: {ex.Message}");
+                }
+            }
+
+            if (deleted > 0)
+                fileLog.Info($"Pruned {deleted} MSI verbose log(s) older than {maxAge.TotalDays:0} days from {directory}");
+        }
+        catch (Exception ex)
+        {
+            fileLog.Debug($"MSI log pruning skipped: {ex.Message}");
+        }
+
+        return deleted;
     }
 
     /// <summary>
@@ -22,6 +84,23 @@ public class MsiInstaller
     /// Automatically detects and removes conflicting installations at the same location.
     /// </summary>
     public InstallResult Install(string msiPath, InstallOptions options)
+    {
+        _fileLog.Info($"MSI install requested: package=\"{msiPath}\" target=\"{options.Target}\"");
+
+        var result = InstallCore(msiPath, options);
+
+        var outcome =
+            $"MSI install finished: package=\"{msiPath}\" success={result.Success} exit={result.ExitCode} " +
+            $"restart={result.RestartAction ?? "None"} message=\"{result.Message}\"";
+        if (result.Success)
+            _fileLog.Info(outcome);
+        else
+            _fileLog.Error(outcome);
+
+        return result;
+    }
+
+    private InstallResult InstallCore(string msiPath, InstallOptions options)
     {
         var result = new InstallResult();
         var logs = new List<string>();
@@ -89,13 +168,16 @@ public class MsiInstaller
             }
 
             // Configure silent UI + verbose logging FIRST, so the uninstall activity from
-            // removing conflicting products below lands in the same %TEMP%\cimian_msi_*.log.
+            // removing conflicting products below lands in the same cimian_msi_*.log.
+            // The log sits beside the tool's own log (pruned at startup) rather than in
+            // %TEMP%, where nothing ever cleaned it up.
             Installer.SetInternalUI(InstallUIOptions.Silent);
             logPath = Path.Combine(
-                Path.GetTempPath(),
-                $"cimian_msi_{Path.GetFileNameWithoutExtension(msiPath)}_{DateTime.Now:yyyyMMdd_HHmmss}.log");
+                ResolveVerboseLogDirectory(),
+                $"{VerboseLogPrefix}{Path.GetFileNameWithoutExtension(msiPath)}_{DateTime.Now:yyyyMMdd_HHmmss}.log");
             Installer.EnableLog(InstallLogModes.Verbose, logPath);
             logs.Add($"Log: {logPath}");
+            _fileLog.Info($"MSI verbose log: {logPath} (product=\"{productName}\" version=\"{productVersion}\")");
 
             // Set up external UI handler for progress tracking
             var messageHandler = new ExternalUIHandler((messageType, message, buttons, icon, defaultButton) =>
@@ -335,9 +417,46 @@ public class MsiInstaller
     }
 
     /// <summary>
+    /// Verbose MSI logs normally live under the tool's log directory. If that
+    /// sub-directory cannot be created the install still proceeds with the log in
+    /// %TEMP%, so a logging problem never blocks an install.
+    /// </summary>
+    private string ResolveVerboseLogDirectory()
+    {
+        var directory = VerboseLogDirectory(_fileLog);
+        try
+        {
+            Directory.CreateDirectory(directory);
+            return directory;
+        }
+        catch (Exception ex)
+        {
+            _fileLog.Warn($"Could not create MSI log directory {directory}; using %TEMP% instead: {ex.Message}");
+            return Path.GetTempPath();
+        }
+    }
+
+    /// <summary>
     /// Uninstall an MSI by product code.
     /// </summary>
     public InstallResult Uninstall(string productCode)
+    {
+        _fileLog.Info($"MSI uninstall requested: productCode={productCode}");
+
+        var result = UninstallCore(productCode);
+
+        var outcome =
+            $"MSI uninstall finished: productCode={productCode} success={result.Success} exit={result.ExitCode} " +
+            $"restart={result.RestartAction ?? "None"} message=\"{result.Message}\"";
+        if (result.Success)
+            _fileLog.Info(outcome);
+        else
+            _fileLog.Error(outcome);
+
+        return result;
+    }
+
+    private InstallResult UninstallCore(string productCode)
     {
         var result = new InstallResult();
         var logs = new List<string>();

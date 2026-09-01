@@ -81,7 +81,13 @@ removal) is tuned for the conventions cimipkg embeds.
 1. Reads `ProductName`, `ProductVersion`, `UpgradeCode` from the MSI property table
 2. Detects conflicting products (by UpgradeCode or display name) — handles WiX-to-cimipkg transitions — and removes them **before** installing, so the new package's files are laid down last
 3. Installs the new MSI silently via the in-process DTF API (`ALLUSERS=1`, `REBOOT=ReallySuppress`). **No `REINSTALL`/repair pass** — a plain install lets the cimipkg MSI run its own sequence (scripts via custom actions, payload overwrite via synthetic File.Version, supersede via the Upgrade table). Invoking the repair engine would trip Windows **SecureRepair** and abort with 1603/1625 on managed clients, so it is deliberately never used.
-4. Logs to `%TEMP%\cimian_msi_*.log`
+4. Writes a verbose Windows Installer log to `C:\ProgramData\ManagedUtilities\logs\sbin-installer\cimian_msi_*.log` (see Logging below)
+
+### Logging
+
+Every run appends to `C:\ProgramData\ManagedUtilities\logs\sbin-installer.log`, created on first use. When that directory is not writable (a non-elevated user) the log falls back to `%LOCALAPPDATA%\sbin-installer\logs\sbin-installer.log`. Lines are `[yyyy-MM-dd HH:mm:ss] LEVEL message` in local time; the file rolls at 5 MB to `sbin-installer.log.1` through `.5`, newest first.
+
+The log records each install and uninstall request (package path, target, flags), the exit code and outcome, and the path of the verbose Windows Installer log for that MSI. Verbose MSI logs go in the `sbin-installer` sub-directory next to the tool log and are deleted at startup once they are older than 30 days. Console output is unchanged and is not the log.
 
 ### .nupkg Format (NuGet/Chocolatey)
 
