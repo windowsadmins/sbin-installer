@@ -1,3 +1,4 @@
+using ManagedUtilities;
 using Microsoft.Extensions.Logging;
 using Microsoft.Win32;
 using SbinInstaller.Models;
@@ -18,11 +19,13 @@ namespace SbinInstaller.Services;
 public class PackageInstaller
 {
     private readonly ILogger<PackageInstaller> _logger;
+    private readonly FileLog _fileLog;
     private readonly IDeserializer _yamlDeserializer;
 
-    public PackageInstaller(ILogger<PackageInstaller> logger)
+    public PackageInstaller(ILogger<PackageInstaller> logger, FileLog fileLog)
     {
         _logger = logger;
+        _fileLog = fileLog;
         _yamlDeserializer = new DeserializerBuilder()
             .IgnoreUnmatchedProperties()
             .Build();
@@ -308,10 +311,32 @@ public class PackageInstaller
     }
 
     /// <summary>
-    /// Install package to the specified target
+    /// Install package to the specified target. Records the request and its outcome
+    /// in the file log around the actual work so every exit path is covered.
     /// </summary>
     [System.Runtime.Versioning.SupportedOSPlatform("windows")]
     public async Task<InstallResult> InstallAsync(InstallOptions options)
+    {
+        _fileLog.Info(
+            $"Install requested: package=\"{options.PackagePath}\" target=\"{options.Target}\" " +
+            $"verbose={options.Verbose} verboseR={options.VerboseR} dumplog={options.DumpLog} " +
+            $"allowUntrusted={options.AllowUntrusted} tempDir=\"{options.TempDir ?? string.Empty}\"");
+
+        var result = await InstallCoreAsync(options);
+
+        var outcome =
+            $"Install finished: package=\"{options.PackagePath}\" success={result.Success} " +
+            $"exit={result.ExitCode} restart={result.RestartAction ?? "None"} message=\"{result.Message}\"";
+        if (result.Success)
+            _fileLog.Info(outcome);
+        else
+            _fileLog.Error(outcome);
+
+        return result;
+    }
+
+    [System.Runtime.Versioning.SupportedOSPlatform("windows")]
+    private async Task<InstallResult> InstallCoreAsync(InstallOptions options)
     {
         var result = new InstallResult();
         var logs = new List<string>();
@@ -321,7 +346,7 @@ public class PackageInstaller
             // MSI packages use native Windows Installer API — completely different flow
             if (DetectPackageType(options.PackagePath) == PackageType.Msi)
             {
-                var msiInstaller = new MsiInstaller(_logger);
+                var msiInstaller = new MsiInstaller(_logger, _fileLog);
                 return msiInstaller.Install(options.PackagePath, options);
             }
 

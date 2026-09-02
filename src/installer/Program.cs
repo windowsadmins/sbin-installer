@@ -1,3 +1,4 @@
+using ManagedUtilities;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using SbinInstaller.Models;
@@ -21,11 +22,17 @@ class Program
     [SupportedOSPlatform("windows")]
     static async Task<int> Main(string[] args)
     {
+        // The file log is the durable record of every install; the console stays
+        // the interactive surface and is unchanged by it.
+        var fileLog = FileLog.ForTool("sbin-installer");
+        MsiInstaller.PruneVerboseLogs(fileLog, TimeSpan.FromDays(30));
+
         // Set up dependency injection with minimal logging initially
         var services = new ServiceCollection();
         services.AddLogging(builder => builder.AddConsole().SetMinimumLevel(LogLevel.Warning));
+        services.AddSingleton(fileLog);
         services.AddSingleton<PackageInstaller>();
-        
+
         var serviceProvider = services.BuildServiceProvider();
         var logger = serviceProvider.GetRequiredService<ILogger<Program>>();
         var installer = serviceProvider.GetRequiredService<PackageInstaller>();
@@ -140,6 +147,7 @@ class Program
             catch (Exception ex)
             {
                 logger.LogError(ex, "Unhandled exception occurred");
+                fileLog.Error("Unhandled exception", ex);
                 Environment.Exit(1);
             }
         },
