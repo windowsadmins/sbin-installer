@@ -129,13 +129,15 @@ public class MsiInstaller
         }
 
         string logPath = string.Empty;
+        // Declared out here so the catch below can name the package when it
+        // goes looking for the custom action's own log.
+        string productName = "Unknown";
 
         try
         {
             logs.Add($"Installing MSI: {Path.GetFileName(msiPath)}");
 
             // Read MSI metadata before installation
-            string productName = "Unknown";
             string productVersion = "";
             string upgradeCode = "";
             string productCode = "";
@@ -273,7 +275,7 @@ public class MsiInstaller
                 // LaunchCondition text, and the CimianPre/Postinstall script output
                 // that cimipkg CAs stream in via Session.Log. Surface those lines here
                 // so the managing client's log answers "why" without a per-box hunt.
-                var diagnostics = ExtractFailureDiagnostics(logPath);
+                var diagnostics = ExtractFailureDiagnostics(logPath, productName);
                 if (diagnostics.Count > 0)
                 {
                     logs.Add("--- failure diagnostics from MSI log ---");
@@ -354,7 +356,7 @@ public class MsiInstaller
     /// and the failing action ("Return value 3") with the action that produced it.
     /// Returns at most a few dozen lines; never throws.
     /// </summary>
-    private List<string> ExtractFailureDiagnostics(string logPath)
+    private List<string> ExtractFailureDiagnostics(string logPath, string productName)
     {
         var diagnostics = new List<string>();
         const int maxLines = 40;
@@ -366,14 +368,21 @@ public class MsiInstaller
                 return diagnostics;
             }
 
-            // The Windows Installer engine may still hold the log open — share fully.
+            // The Windows Installer engine may still hold the log open - share fully.
             using var stream = new FileStream(
                 logPath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
             using var reader = new StreamReader(stream, detectEncodingFromByteOrderMarks: true);
 
+            // Collect everything that matches, then keep the TAIL. This used to stop
+            // at the first maxLines matches, which on a verbose log is spent entirely
+            // on the custom actions being scheduled at the start of the sequence - so
+            // the budget ran out before reaching the failure, and the reported message
+            // was a list of actions that started fine. A failure is at the end of a
+            // log, so the end is the part worth keeping.
+            var matches = new List<string>();
             string? lastActionStart = null;
             string? line;
-            while ((line = reader.ReadLine()) != null && diagnostics.Count < maxLines)
+            while ((line = reader.ReadLine()) != null)
             {
                 if (line.Contains("Action start", StringComparison.OrdinalIgnoreCase))
                 {
@@ -386,14 +395,14 @@ public class MsiInstaller
                     line.Contains("CimianPostinstall", StringComparison.OrdinalIgnoreCase) ||
                     line.Contains("CimianUninstall", StringComparison.OrdinalIgnoreCase))
                 {
-                    diagnostics.Add(line.Trim());
+                    matches.Add(line.Trim());
                     continue;
                 }
 
                 // A LaunchCondition rejection logs its Description verbatim.
                 if (line.Contains("pending Windows reboot", StringComparison.OrdinalIgnoreCase))
                 {
-                    diagnostics.Add(line.Trim());
+                    matches.Add(line.Trim());
                     continue;
                 }
 
@@ -402,18 +411,98 @@ public class MsiInstaller
                 {
                     if (lastActionStart != null)
                     {
-                        diagnostics.Add(lastActionStart.Trim());
+                        matches.Add(lastActionStart.Trim());
                     }
-                    diagnostics.Add(line.Trim());
+                    matches.Add(line.Trim());
                 }
             }
+
+            if (matches.Count > maxLines)
+            {
+                diagnostics.Add($"... {matches.Count - maxLines} earlier diagnostic line(s) omitted ...");
+                matches.RemoveRange(0, matches.Count - maxLines);
+            }
+            diagnostics.AddRange(matches);
         }
         catch (Exception ex)
         {
             _logger.LogDebug("Could not extract MSI failure diagnostics: {Error}", ex.Message);
         }
 
+        // The MSI log records that a custom action failed, never what the script
+        // actually said - "PowerShell script exited 1" and nothing more. The script's
+        // own output is written to a per-package log beside the client's other logs,
+        // and without it a 1720 cannot be diagnosed without getting onto the machine,
+        // which is exactly what remote fleet reporting is supposed to avoid.
+        diagnostics.AddRange(ExtractCustomActionScriptOutput(productName));
+
         return diagnostics;
+    }
+
+    /// <summary>
+    /// Returns the tail of the custom-action script logs cimipkg writes per package,
+    /// which hold the pre/post/uninstall script output that the MSI log does not.
+    /// Best-effort; never throws.
+    /// </summary>
+    private List<string> ExtractCustomActionScriptOutput(string productName)
+    {
+        var output = new List<string>();
+        const int tailLines = 25;
+
+        if (string.IsNullOrWhiteSpace(productName))
+        {
+            return output;
+        }
+
+        try
+        {
+            var logsDir = Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData),
+                "ManagedInstalls", "Logs");
+            if (!Directory.Exists(logsDir))
+            {
+                return output;
+            }
+
+            foreach (var phase in new[] { "CimianPreinstall", "CimianPostinstall", "CimianUninstall" })
+            {
+                var caLog = Path.Combine(logsDir, $"cimipkg-{productName}-{phase}.log");
+                if (!File.Exists(caLog))
+                {
+                    continue;
+                }
+
+                List<string> lines;
+                using (var stream = new FileStream(
+                    caLog, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete))
+                using (var reader = new StreamReader(stream, detectEncodingFromByteOrderMarks: true))
+                {
+                    lines = new List<string>();
+                    string? line;
+                    while ((line = reader.ReadLine()) != null)
+                    {
+                        if (!string.IsNullOrWhiteSpace(line))
+                        {
+                            lines.Add(line.TrimEnd());
+                        }
+                    }
+                }
+
+                if (lines.Count == 0)
+                {
+                    continue;
+                }
+
+                output.Add($"--- {phase} script output (last {Math.Min(tailLines, lines.Count)} of {lines.Count} lines) ---");
+                output.AddRange(lines.Skip(Math.Max(0, lines.Count - tailLines)));
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug("Could not read custom-action script output: {Error}", ex.Message);
+        }
+
+        return output;
     }
 
     /// <summary>
