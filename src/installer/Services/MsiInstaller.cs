@@ -444,6 +444,59 @@ public class MsiInstaller
     /// which hold the pre/post/uninstall script output that the MSI log does not.
     /// Best-effort; never throws.
     /// </summary>
+    /// <summary>
+    /// Locate the log a cimipkg script custom action wrote for one phase, or null.
+    /// </summary>
+    /// <remarks>
+    /// There are two layouts and both are live in the field. Current cimipkg writes
+    /// one directory per package, logs\packages\&lt;ProductName&gt;\&lt;phase&gt;.log, having
+    /// moved off the flat "cimipkg-&lt;product&gt;-&lt;action&gt;.log" at the logs root because
+    /// that root is shared with the managing client's session tree and a few dozen
+    /// never-expiring sidecars there made it unreadable. Packages built before that
+    /// change still write the flat name, and the managing client relocates stragglers
+    /// into the new layout when it next runs.
+    ///
+    /// Reading only the flat name — which is what this did — finds nothing for any
+    /// package built by current cimipkg, so a failed custom action reported the line
+    /// number it died on and never the message it printed. Check the current layout
+    /// first, then the legacy one.
+    ///
+    /// ProductName reaches a filesystem path, and cimipkg replaces the characters
+    /// NTFS rejects with underscores when it builds the directory name, so the same
+    /// substitution has to happen here or a product with a slash or colon in its name
+    /// never resolves.
+    /// </remarks>
+    private static string? ResolveCustomActionLog(string logsDir, string productName, string phase)
+    {
+        var safeProduct = productName;
+        foreach (var invalid in new[] { '\\', '/', ':', '*', '?', '"', '<', '>', '|' })
+        {
+            safeProduct = safeProduct.Replace(invalid, '_');
+        }
+
+        // logs\packages\<Product>\postinstall.log — cimipkg strips the "Cimian"
+        // prefix and lowercases what remains when it names the file.
+        var shortPhase = phase.StartsWith("Cimian", StringComparison.Ordinal)
+            ? phase["Cimian".Length..]
+            : phase;
+
+        var candidates = new[]
+        {
+            Path.Combine(logsDir, "packages", safeProduct, $"{shortPhase.ToLowerInvariant()}.log"),
+            Path.Combine(logsDir, $"cimipkg-{productName}-{phase}.log"),
+        };
+
+        foreach (var candidate in candidates)
+        {
+            if (File.Exists(candidate))
+            {
+                return candidate;
+            }
+        }
+
+        return null;
+    }
+
     private List<string> ExtractCustomActionScriptOutput(string productName)
     {
         var output = new List<string>();
@@ -458,7 +511,7 @@ public class MsiInstaller
         {
             var logsDir = Path.Combine(
                 Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData),
-                "ManagedInstalls", "Logs");
+                "ManagedInstalls", "logs");
             if (!Directory.Exists(logsDir))
             {
                 return output;
@@ -466,8 +519,8 @@ public class MsiInstaller
 
             foreach (var phase in new[] { "CimianPreinstall", "CimianPostinstall", "CimianUninstall" })
             {
-                var caLog = Path.Combine(logsDir, $"cimipkg-{productName}-{phase}.log");
-                if (!File.Exists(caLog))
+                var caLog = ResolveCustomActionLog(logsDir, productName, phase);
+                if (caLog is null)
                 {
                     continue;
                 }
