@@ -759,16 +759,41 @@ public class MsiInstaller
             _logger.LogInformation("Removing conflicting product: {Name} ({Code})",
                 conflict.ProductName, conflict.ProductCode);
 
-            var uninstallResult = Uninstall(conflict.ProductCode);
-            if (uninstallResult.Success)
+            // A conflict that cannot be removed is a warning, not a reason to abandon
+            // the install -- that is what the else-branch below has always said. It only
+            // held for a removal that returned a failed result, though: UninstallCore
+            // catches InstallerException and nothing else, so any other exception
+            // escaped RemoveProducts and aborted the whole install from the outer
+            // handler, reported as "Unexpected error during MSI installation".
+            //
+            // Seen in the field on a product registered under an UpgradeCode while not
+            // actually installed: the removal threw "This action is only valid for
+            // products that are currently installed" and the package could never
+            // update again on that machine, on every new version, indefinitely.
+            //
+            // The exception type is named in the warning because the message alone did
+            // not identify where it came from.
+            try
             {
-                logs.Add($"Removed: {conflict.ProductName}");
+                var uninstallResult = Uninstall(conflict.ProductCode);
+                if (uninstallResult.Success)
+                {
+                    logs.Add($"Removed: {conflict.ProductName}");
+                }
+                else
+                {
+                    logs.Add($"Warning: could not remove {conflict.ProductName}: {uninstallResult.Message}");
+                    _logger.LogWarning("Failed to remove conflicting product {Name}: {Error}",
+                        conflict.ProductName, uninstallResult.Message);
+                }
             }
-            else
+            catch (Exception ex)
             {
-                logs.Add($"Warning: could not remove {conflict.ProductName}: {uninstallResult.Message}");
-                _logger.LogWarning("Failed to remove conflicting product {Name}: {Error}",
-                    conflict.ProductName, uninstallResult.Message);
+                logs.Add(
+                    $"Warning: could not remove {conflict.ProductName} " +
+                    $"({ex.GetType().Name}): {ex.Message}. Continuing with the install.");
+                _logger.LogWarning(ex, "Removing conflicting product {Name} threw; continuing",
+                    conflict.ProductName);
             }
         }
     }
