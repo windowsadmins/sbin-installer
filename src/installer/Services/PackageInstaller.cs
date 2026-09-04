@@ -341,6 +341,10 @@ public class PackageInstaller
         var result = new InstallResult();
         var logs = new List<string>();
 
+        // Declared outside the try so the finally below can free the extracted
+        // payload on every exit path, not just the successful one.
+        PackageInfo? extracted = null;
+
         try
         {
             // MSI packages use native Windows Installer API — completely different flow
@@ -358,6 +362,7 @@ public class PackageInstaller
 
             // Get package information first (pass custom temp dir to avoid MAX_PATH issues)
             var packageInfo = await GetPackageInfoAsync(options.PackagePath, options.TempDir);
+            extracted = packageInfo;
             
             // Determine if elevation will likely be needed
             var packageInstallLocation = packageInfo.GetInstallLocation();
@@ -580,21 +585,35 @@ public class PackageInstaller
             result.RestartAction = packageInfo.PackageType == PackageType.Nupkg ? null : packageInfo.BuildInfo.RestartAction;
             result.Logs = logs;
 
-            // Clean up extraction directory
-            try
-            {
-                Directory.Delete(packageInfo.ExtractedPath, true);
-            }
-            catch (Exception ex)
-            {
-                _logger.LogWarning("Failed to clean up temporary directory: {Error}", ex.Message);
-            }
         }
         catch (Exception ex)
         {
             result.Message = ex.Message;
             result.ExitCode = 1;
             _logger.LogError(ex, "Installation failed");
+        }
+        finally
+        {
+            // Free the extracted payload however this call ends. Cleaning up only
+            // on success meant a package that unpacked and then failed - a script
+            // that returned non-zero, a blocked application, a copy error - left
+            // its whole extracted tree behind. Retried hourly, a multi-gigabyte
+            // payload fills the disk, and a full disk then fails installs that
+            // would otherwise have worked.
+            if (extracted is not null && !string.IsNullOrEmpty(extracted.ExtractedPath))
+            {
+                try
+                {
+                    if (Directory.Exists(extracted.ExtractedPath))
+                    {
+                        Directory.Delete(extracted.ExtractedPath, true);
+                    }
+                }
+                catch (Exception cleanupError)
+                {
+                    _logger.LogWarning("Failed to clean up temporary directory: {Error}", cleanupError.Message);
+                }
+            }
         }
 
         result.Logs = logs;
