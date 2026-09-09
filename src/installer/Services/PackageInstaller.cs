@@ -773,8 +773,40 @@ public class PackageInstaller
             if (!string.IsNullOrEmpty(targetFileDir) && !Directory.Exists(targetFileDir))
                 Directory.CreateDirectory(targetFileDir);
 
+            // File.Copy throws UnauthorizedAccessException when the destination
+            // carries the ReadOnly attribute. That is an attribute check, not an
+            // ACL check, so elevation does not bypass it -- an elevated install
+            // over a tree that ships read-only files (engine and SDK payloads
+            // commonly do) fails on the first one and keeps failing forever.
+            ClearReadOnly(targetFile);
+
             File.Copy(file, targetFile, true);
             _logger.LogDebug("Copied: {Source} -> {Target}", file, targetFile);
+        }
+    }
+
+    /// <summary>
+    /// Drop the ReadOnly attribute from an existing destination file so it can be
+    /// overwritten. No-op when the file is absent or already writable.
+    /// </summary>
+    private void ClearReadOnly(string targetFile)
+    {
+        try
+        {
+            if (!File.Exists(targetFile))
+                return;
+
+            var attributes = File.GetAttributes(targetFile);
+            if ((attributes & FileAttributes.ReadOnly) == FileAttributes.ReadOnly)
+            {
+                File.SetAttributes(targetFile, attributes & ~FileAttributes.ReadOnly);
+                _logger.LogDebug("Cleared read-only attribute: {Target}", targetFile);
+            }
+        }
+        catch (Exception ex)
+        {
+            // Let the copy raise the real error rather than masking it here.
+            _logger.LogDebug("Could not clear read-only on {Target}: {Message}", targetFile, ex.Message);
         }
     }
 
@@ -801,6 +833,8 @@ public class PackageInstaller
             
             if (!string.IsNullOrEmpty(targetFileDir) && !Directory.Exists(targetFileDir))
                 Directory.CreateDirectory(targetFileDir);
+
+            ClearReadOnly(targetFile);
 
             File.Copy(file, targetFile, true);
             _logger.LogDebug("Copied .nupkg content: {Source} -> {Target}", file, targetFile);
