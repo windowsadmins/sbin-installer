@@ -27,7 +27,7 @@ A minimal, focused installer that:
 - **No --source** - you specify `--pkg <pathToPackage>` directly
 - **Lightweight** - mimics `/usr/sbin/installer` behavior
 - **Deterministic** - predictable, simple operation
-- **Native MSI support** - in-process DTF API, no `msiexec` dependency
+- **Native MSI support** - in-process Windows Installer API (msi.dll), no `msiexec` dependency
 - **Native .NET** - single executable, no external dependencies
 
 ## Package Source Structure
@@ -55,10 +55,9 @@ structure never changes — only the packaging does.
 
 `.msi` is now the **default output format** for [cimipkg](https://github.com/windowsadmins/cimian-pkg)
 and the recommended format for all new packages. cimipkg builds MSIs natively
-via the DTF API (WixToolset.Dtf.WindowsInstaller) — no WiX Toolset or
-`msiexec` dependency at build time.
+through msi.dll — no WiX Toolset or `msiexec` dependency at build time.
 
-sbin-installer processes cimipkg-built MSIs via the same DTF API in-process,
+sbin-installer installs cimipkg-built MSIs through the same msi.dll API in-process,
 providing better error handling, progress callbacks, and conflict resolution
 than shell-out to `msiexec.exe`. It can install any standard MSI, but for
 third-party or non-cimipkg MSIs you're generally better off using `msiexec`
@@ -80,7 +79,7 @@ removal) is tuned for the conventions cimipkg embeds.
 
 1. Reads `ProductName`, `ProductVersion`, `UpgradeCode` from the MSI property table
 2. Detects conflicting products (by UpgradeCode or display name) — handles WiX-to-cimipkg transitions — and removes them **before** installing, so the new package's files are laid down last
-3. Installs the new MSI silently via the in-process DTF API (`ALLUSERS=1`, `REBOOT=ReallySuppress`). **No `REINSTALL`/repair pass** — a plain install lets the cimipkg MSI run its own sequence (scripts via custom actions, payload overwrite via synthetic File.Version, supersede via the Upgrade table). Invoking the repair engine would trip Windows **SecureRepair** and abort with 1603/1625 on managed clients, so it is deliberately never used.
+3. Installs the new MSI silently via the in-process Windows Installer API (`ALLUSERS=1`, `REBOOT=ReallySuppress`). **No `REINSTALL`/repair pass** — a plain install lets the cimipkg MSI run its own sequence (scripts via custom actions, payload overwrite via synthetic File.Version, supersede via the Upgrade table). Invoking the repair engine would trip Windows **SecureRepair** and abort with 1603/1625 on managed clients, so it is deliberately never used.
 4. Writes a verbose Windows Installer log to `C:\ProgramData\ManagedUtilities\logs\sbin-installer\cimian_msi_*.log` (see Logging below)
 
 ### Logging
@@ -150,7 +149,7 @@ installer.exe osquery.5.19.0.nupkg
 **MSI packages:**
 1. Read metadata (ProductName, ProductVersion, UpgradeCode) from MSI property table
 2. Detect and remove conflicting products (by UpgradeCode or display name) **before** installing
-3. Install silently via the DTF in-process API — plain install, **no `REINSTALL`/repair pass**
+3. Install silently via the in-process Windows Installer API — plain install, **no `REINSTALL`/repair pass**
 4. Custom actions (preinstall/postinstall/uninstall) run automatically as part of the MSI sequence
 
 **nupkg packages:**
@@ -280,7 +279,7 @@ the full placeholder reference.
 | Cache management | Complex | None |
 | Source repositories | Required | Direct file path |
 | Package format | `.nupkg` | `.msi` (default) + `.nupkg` |
-| MSI support | Via `msiexec` shelling | Native DTF in-process API |
+| MSI support | Via `msiexec` shelling | Native in-process Windows Installer API |
 | Dependency resolution | Full tree | Simple list |
 | Script support | tools\chocolatey*.ps1 | Yes (Supported via shim + scripts/*.ps1 + MSI custom actions) |
 | Chocolatey helpers | Native | Yes (Common helpers shimmed) |

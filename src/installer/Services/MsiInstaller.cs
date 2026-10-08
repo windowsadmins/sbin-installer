@@ -1,12 +1,12 @@
 using ManagedUtilities;
 using Microsoft.Extensions.Logging;
 using SbinInstaller.Models;
-using WixToolset.Dtf.WindowsInstaller;
+using SbinInstaller.Services.Msi;
 
 namespace SbinInstaller.Services;
 
 /// <summary>
-/// Installs MSI packages using DTF (direct msi.dll interop), replacing msiexec.exe.
+/// Installs MSI packages through msi.dll in-process, replacing msiexec.exe.
 /// Provides in-process installation with rich progress callbacks and better error info.
 /// </summary>
 public class MsiInstaller
@@ -144,23 +144,18 @@ public class MsiInstaller
             string installLocation = "";
             try
             {
-                using var db = new Database(msiPath, DatabaseOpenMode.ReadOnly);
-                productName = db.ExecuteScalar(
-                    "SELECT `Value` FROM `Property` WHERE `Property` = 'ProductName'")?.ToString() ?? "Unknown";
-                productVersion = db.ExecuteScalar(
-                    "SELECT `Value` FROM `Property` WHERE `Property` = 'ProductVersion'")?.ToString() ?? "";
-                upgradeCode = db.ExecuteScalar(
-                    "SELECT `Value` FROM `Property` WHERE `Property` = 'UpgradeCode'")?.ToString() ?? "";
-                productCode = db.ExecuteScalar(
-                    "SELECT `Value` FROM `Property` WHERE `Property` = 'ProductCode'")?.ToString() ?? "";
+                using var db = MsiDatabase.OpenReadOnly(msiPath);
+                productName = db.GetProperty("ProductName") ?? "Unknown";
+                productVersion = db.GetProperty("ProductVersion") ?? "";
+                upgradeCode = db.GetProperty("UpgradeCode") ?? "";
+                productCode = db.GetProperty("ProductCode") ?? "";
                 // ARPINSTALLLOCATION or custom property for install path
-                installLocation = db.ExecuteScalar(
-                    "SELECT `Value` FROM `Property` WHERE `Property` = 'ARPINSTALLLOCATION'")?.ToString() ?? "";
+                installLocation = db.GetProperty("ARPINSTALLLOCATION") ?? "";
                 if (string.IsNullOrEmpty(installLocation))
                 {
                     // Try to get from Directory table - resolve INSTALLFOLDER
                     installLocation = db.ExecuteScalar(
-                        "SELECT `DefaultDir` FROM `Directory` WHERE `Directory` = 'INSTALLFOLDER'")?.ToString() ?? "";
+                        "SELECT `DefaultDir` FROM `Directory` WHERE `Directory` = ?", "INSTALLFOLDER") ?? "";
                 }
                 logs.Add($"Product: {productName} {productVersion}");
             }
@@ -173,27 +168,23 @@ public class MsiInstaller
             // removing conflicting products below lands in the same cimian_msi_*.log.
             // The log sits beside the tool's own log (pruned at startup) rather than in
             // %TEMP%, where nothing ever cleaned it up.
-            Installer.SetInternalUI(InstallUIOptions.Silent);
+            WindowsInstaller.SetInternalUISilent();
             logPath = Path.Combine(
                 ResolveVerboseLogDirectory(),
                 $"{VerboseLogPrefix}{Path.GetFileNameWithoutExtension(msiPath)}_{DateTime.Now:yyyyMMdd_HHmmss}.log");
-            Installer.EnableLog(InstallLogModes.Verbose, logPath);
+            WindowsInstaller.EnableVerboseLog(logPath);
             logs.Add($"Log: {logPath}");
             _fileLog.Info($"MSI verbose log: {logPath} (product=\"{productName}\" version=\"{productVersion}\")");
 
             // Set up external UI handler for progress tracking
-            var messageHandler = new ExternalUIHandler((messageType, message, buttons, icon, defaultButton) =>
+            WindowsInstaller.SetExternalUI((context, messageType, message) =>
             {
                 if (options.Verbose && !string.IsNullOrEmpty(message))
                 {
                     _logger.LogDebug("MSI: {Message}", message);
                 }
-                return MessageResult.None;
-            });
-
-            Installer.SetExternalUI(messageHandler,
-                InstallLogModes.ActionStart | InstallLogModes.Error |
-                InstallLogModes.Warning | InstallLogModes.Progress);
+                return 0; // let Windows Installer carry on
+            }, WindowsInstaller.UiFilterErrorWarningActionProgress);
 
             // Find conflicting installations and remove them BEFORE installing, so the new
             // package's files are laid down LAST (nothing a conflict's uninstall touched is
@@ -235,15 +226,15 @@ public class MsiInstaller
             logs.Add("Installing...");
             try
             {
-                Installer.InstallProduct(msiPath, properties);
+                WindowsInstaller.InstallProduct(msiPath, properties);
             }
-            catch (InstallerException iex) when (iex.ErrorCode == 1618)
+            catch (MsiException iex) when (iex.ErrorCode == 1618)
             {
                 // Lost a race with an install that started after our idle check.
                 // Wait for it and retry once before giving up.
                 logs.Add("Another installation started concurrently (1618); waiting to retry once...");
                 WaitForWindowsInstallerIdle(600, logs);
-                Installer.InstallProduct(msiPath, properties);
+                WindowsInstaller.InstallProduct(msiPath, properties);
             }
 
             logs.Add($"Installation completed successfully: {productName} {productVersion}");
@@ -251,7 +242,7 @@ public class MsiInstaller
             result.Message = $"Installed {productName} {productVersion}";
             result.ExitCode = 0;
         }
-        catch (InstallerException ex)
+        catch (MsiException ex)
         {
             logs.Add($"MSI installation failed: {ex.Message} (Error code: {ex.ErrorCode})");
             result.Message = $"MSI installation failed: {ex.Message}";
@@ -626,8 +617,7 @@ public class MsiInstaller
             // skip the ConfigureProduct call so we don't surface a 1605 error.
             try
             {
-                var existing = new ProductInstallation(productCode);
-                if (!existing.IsInstalled)
+                if (!WindowsInstaller.IsInstalled(productCode))
                 {
                     logs.Add($"Product {productCode} is already uninstalled");
                     result.Success = true;
@@ -646,7 +636,7 @@ public class MsiInstaller
                 return result;
             }
 
-            Installer.SetInternalUI(InstallUIOptions.Silent);
+            WindowsInstaller.SetInternalUISilent();
 
             // Conflict cleanup uses this same uninstall path. Serialize it just like
             // installs so an unrelated MSI transaction cannot turn cleanup into 1618
@@ -658,26 +648,24 @@ public class MsiInstaller
 
             try
             {
-                Installer.ConfigureProduct(productCode, 0, InstallState.Absent,
-                    "REBOOT=ReallySuppress");
+                WindowsInstaller.RemoveProduct(productCode, "REBOOT=ReallySuppress");
             }
-            catch (InstallerException iex) when (iex.ErrorCode == 1618)
+            catch (MsiException iex) when (iex.ErrorCode == 1618)
             {
                 logs.Add("Another installation started concurrently (1618); waiting to retry uninstall once...");
                 WaitForWindowsInstallerIdle(600, logs);
-                Installer.ConfigureProduct(productCode, 0, InstallState.Absent,
-                    "REBOOT=ReallySuppress");
+                WindowsInstaller.RemoveProduct(productCode, "REBOOT=ReallySuppress");
             }
 
             logs.Add("Uninstall completed successfully");
             result.Success = true;
             result.ExitCode = 0;
         }
-        catch (InstallerException ex)
+        catch (MsiException ex)
         {
             // ERROR_UNKNOWN_PRODUCT (1605): product wasn't installed in the first place.
             // This can happen if a major upgrade already removed it between our
-            // ProductInstallation check and the ConfigureProduct call.
+            // IsInstalled check and the RemoveProduct call.
             if (ex.ErrorCode == 1605)
             {
                 logs.Add($"Product {productCode} is no longer installed — treating as removed");
@@ -737,7 +725,7 @@ public class MsiInstaller
                 var upgradeCodeForQuery = newUpgradeCode.StartsWith("{")
                     ? newUpgradeCode
                     : "{" + newUpgradeCode + "}";
-                foreach (var related in ProductInstallation.GetRelatedProducts(upgradeCodeForQuery))
+                foreach (var related in WindowsInstaller.GetRelatedProducts(upgradeCodeForQuery))
                 {
                     if (!seen.Add(related.ProductCode))
                         continue;
@@ -763,7 +751,7 @@ public class MsiInstaller
         {
             try
             {
-                foreach (var product in ProductInstallation.AllProducts)
+                foreach (var product in WindowsInstaller.GetAllProducts())
                 {
                     try
                     {
@@ -815,7 +803,7 @@ public class MsiInstaller
             // A conflict that cannot be removed is a warning, not a reason to abandon
             // the install -- that is what the else-branch below has always said. It only
             // held for a removal that returned a failed result, though: UninstallCore
-            // catches InstallerException and nothing else, so any other exception
+            // catches MsiException and nothing else, so any other exception
             // escaped RemoveProducts and aborted the whole install from the outer
             // handler, reported as "Unexpected error during MSI installation".
             //
@@ -861,7 +849,7 @@ public class MsiInstaller
 
         try
         {
-            foreach (var installation in ProductInstallation.GetRelatedProducts(upgradeCode))
+            foreach (var installation in WindowsInstaller.GetRelatedProducts(upgradeCode))
             {
                 try
                 {
