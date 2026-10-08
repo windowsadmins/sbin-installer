@@ -44,6 +44,9 @@ jobs:
       - name: Build
         run: dotnet build src/installer/installer.csproj --configuration Release --no-restore --verbosity minimal
 
+      - name: Test
+        run: dotnet test tests/installer.Tests/installer.Tests.csproj --configuration Release
+
       - name: Smoke-test executable
         shell: pwsh
         run: |

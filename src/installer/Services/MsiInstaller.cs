@@ -39,12 +39,42 @@ public class MsiInstaller
     /// Bounded to <paramref name="maxDeletes"/> files per call and never throws, so a
     /// slow disk or a permissions surprise cannot delay or fail an install.
     /// </summary>
-    public static int PruneVerboseLogs(FileLog fileLog, TimeSpan maxAge, int maxDeletes = 500)
+    public static int PruneVerboseLogs(FileLog fileLog, TimeSpan maxAge, int maxDeletes = 500) =>
+        PruneVerboseLogsIn(fileLog, VerboseLogDirectory(fileLog), maxAge, maxDeletes);
+
+    /// <summary>
+    /// Deletes verbose Windows Installer logs older than <paramref name="maxAge"/> from
+    /// %TEMP%. Builds before the log moved under the tool's log directory wrote every
+    /// cimian_msi_*.log there, and the %TEMP% fallback still can, so this keeps them on
+    /// the same retention as the current directory. Same bounds and safety as
+    /// <see cref="PruneVerboseLogs"/>.
+    /// </summary>
+    public static int PruneLegacyTempLogs(FileLog fileLog, TimeSpan maxAge, int maxDeletes = 500)
+    {
+        string directory;
+        try
+        {
+            directory = Path.GetTempPath();
+        }
+        catch (Exception ex)
+        {
+            fileLog.Debug($"Legacy MSI log pruning skipped: {ex.Message}");
+            return 0;
+        }
+
+        return PruneVerboseLogsIn(fileLog, directory, maxAge, maxDeletes);
+    }
+
+    /// <summary>
+    /// Deletes cimian_msi_*.log files older than <paramref name="maxAge"/> from
+    /// <paramref name="directory"/>, at most <paramref name="maxDeletes"/> per call.
+    /// Never throws.
+    /// </summary>
+    public static int PruneVerboseLogsIn(FileLog fileLog, string directory, TimeSpan maxAge, int maxDeletes = 500)
     {
         var deleted = 0;
         try
         {
-            var directory = VerboseLogDirectory(fileLog);
             if (!Directory.Exists(directory))
                 return 0;
 
