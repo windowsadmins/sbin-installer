@@ -18,7 +18,7 @@ public enum PackageType
     /// </summary>
     Nupkg,
     /// <summary>
-    /// Windows Installer .msi format (native DTF installation)
+    /// Windows Installer .msi format (native in-process installation)
     /// </summary>
     Msi
 }
