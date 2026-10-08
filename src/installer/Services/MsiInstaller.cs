@@ -224,9 +224,10 @@ public class MsiInstaller
 
             // Install (conflicts, if any, were already removed above).
             logs.Add("Installing...");
+            uint installResult;
             try
             {
-                WindowsInstaller.InstallProduct(msiPath, properties);
+                installResult = WindowsInstaller.InstallProduct(msiPath, properties);
             }
             catch (MsiException iex) when (iex.ErrorCode == 1618)
             {
@@ -234,13 +235,14 @@ public class MsiInstaller
                 // Wait for it and retry once before giving up.
                 logs.Add("Another installation started concurrently (1618); waiting to retry once...");
                 WaitForWindowsInstallerIdle(600, logs);
-                WindowsInstaller.InstallProduct(msiPath, properties);
+                installResult = WindowsInstaller.InstallProduct(msiPath, properties);
             }
 
             logs.Add($"Installation completed successfully: {productName} {productVersion}");
             result.Success = true;
             result.Message = $"Installed {productName} {productVersion}";
             result.ExitCode = 0;
+            ApplyRebootResult(result, installResult, logs);
         }
         catch (MsiException ex)
         {
@@ -248,31 +250,20 @@ public class MsiInstaller
             result.Message = $"MSI installation failed: {ex.Message}";
             result.ExitCode = ex.ErrorCode;
 
-            // Check for reboot-required (3010) -- install succeeded, just needs reboot
-            if (ex.ErrorCode == 3010)
+            // 3010 and 1641 never reach here: InstallProduct returns them as success
+            // and ApplyRebootResult reports the reboot.
+            //
+            // A bare 1603 is undiagnosable from the caller's log. The verbose MSI
+            // log enabled above holds the actual cause -- the failing action, any
+            // LaunchCondition text, and the CimianPre/Postinstall script output
+            // that cimipkg CAs stream in via Session.Log. Surface those lines here
+            // so the managing client's log answers "why" without a per-box hunt.
+            var diagnostics = ExtractFailureDiagnostics(logPath, productName);
+            if (diagnostics.Count > 0)
             {
-                logs.Add("Reboot required to complete installation");
-                result.Success = true;
-                // Overwrite the failure message set above -- this is a successful install.
-                result.Message = "Installation completed successfully (reboot required)";
-                result.RestartAction = "restart";
-                result.ExitCode = 0;
-                // Conflicts (if any) were already removed before the install above.
-            }
-            else
-            {
-                // A bare 1603 is undiagnosable from the caller's log. The verbose MSI
-                // log enabled above holds the actual cause -- the failing action, any
-                // LaunchCondition text, and the CimianPre/Postinstall script output
-                // that cimipkg CAs stream in via Session.Log. Surface those lines here
-                // so the managing client's log answers "why" without a per-box hunt.
-                var diagnostics = ExtractFailureDiagnostics(logPath, productName);
-                if (diagnostics.Count > 0)
-                {
-                    logs.Add("--- failure diagnostics from MSI log ---");
-                    logs.AddRange(diagnostics);
-                    result.Message = $"MSI installation failed: {ex.Message} | {diagnostics[^1]}";
-                }
+                logs.Add("--- failure diagnostics from MSI log ---");
+                logs.AddRange(diagnostics);
+                result.Message = $"MSI installation failed: {ex.Message} | {diagnostics[^1]}";
             }
         }
         catch (Exception ex)
@@ -646,20 +637,22 @@ public class MsiInstaller
                 logs.Add("Windows Installer still busy after 10 minutes; attempting uninstall anyway");
             }
 
+            uint removeResult;
             try
             {
-                WindowsInstaller.RemoveProduct(productCode, "REBOOT=ReallySuppress");
+                removeResult = WindowsInstaller.RemoveProduct(productCode, "REBOOT=ReallySuppress");
             }
             catch (MsiException iex) when (iex.ErrorCode == 1618)
             {
                 logs.Add("Another installation started concurrently (1618); waiting to retry uninstall once...");
                 WaitForWindowsInstallerIdle(600, logs);
-                WindowsInstaller.RemoveProduct(productCode, "REBOOT=ReallySuppress");
+                removeResult = WindowsInstaller.RemoveProduct(productCode, "REBOOT=ReallySuppress");
             }
 
             logs.Add("Uninstall completed successfully");
             result.Success = true;
             result.ExitCode = 0;
+            ApplyRebootResult(result, removeResult, logs);
         }
         catch (MsiException ex)
         {
@@ -678,17 +671,30 @@ public class MsiInstaller
             logs.Add($"MSI uninstall failed: {ex.Message}");
             result.Message = ex.Message;
             result.ExitCode = ex.ErrorCode;
-
-            if (ex.ErrorCode == 3010)
-            {
-                result.Success = true;
-                result.RestartAction = "restart";
-                result.ExitCode = 0;
-            }
         }
 
         result.Logs = logs;
         return result;
+    }
+
+    /// <summary>
+    /// Records a reboot that Windows Installer asked for on an otherwise successful
+    /// install or uninstall. With REBOOT=ReallySuppress a package that needs one returns
+    /// 3010 instead of restarting; 1641 means Windows Installer started the restart
+    /// itself. Either way the caller has to know, so RestartAction becomes "restart".
+    /// </summary>
+    internal static void ApplyRebootResult(InstallResult result, uint resultCode, List<string> logs)
+    {
+        if (resultCode == 3010)
+        {
+            logs.Add("Reboot required to complete the operation (3010)");
+            result.RestartAction = "restart";
+        }
+        else if (resultCode == 1641)
+        {
+            logs.Add("Windows Installer initiated a reboot (1641)");
+            result.RestartAction = "restart";
+        }
     }
 
     /// <summary>

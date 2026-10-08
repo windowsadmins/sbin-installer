@@ -23,9 +23,8 @@ public sealed class MsiException : Exception
 /// <summary>
 /// The Windows Installer calls sbin-installer makes, over msi.dll directly.
 ///
-/// Install and configure calls follow DTF's result rules, which the callers were
-/// written against: 0, 3010 (reboot required) and 1641 (reboot initiated) return
-/// normally, and any other code throws <see cref="MsiException"/>.
+/// Install and remove return 0, 3010 (reboot required) or 1641 (reboot initiated),
+/// so the caller can report the reboot; any other code throws <see cref="MsiException"/>.
 /// </summary>
 public static class WindowsInstaller
 {
@@ -70,11 +69,12 @@ public static class WindowsInstaller
         MsiSetExternalUIW(handler, filter, IntPtr.Zero);
     }
 
-    public static void InstallProduct(string packagePath, string commandLine) =>
+    /// <summary>Installs the package; returns 0, 3010 or 1641.</summary>
+    public static uint InstallProduct(string packagePath, string commandLine) =>
         CheckInstallResult(MsiInstallProductW(packagePath, commandLine));
 
-    /// <summary>Uninstalls <paramref name="productCode"/> (the whole product, set to absent).</summary>
-    public static void RemoveProduct(string productCode, string commandLine) =>
+    /// <summary>Uninstalls <paramref name="productCode"/> (the whole product, set to absent); returns 0, 3010 or 1641.</summary>
+    public static uint RemoveProduct(string productCode, string commandLine) =>
         CheckInstallResult(MsiConfigureProductExW(productCode, 0, INSTALLSTATE_ABSENT, commandLine));
 
     /// <summary>True when Windows Installer reports the product installed (INSTALLSTATE_DEFAULT).</summary>
@@ -121,11 +121,11 @@ public static class WindowsInstaller
         }
     }
 
-    private static void CheckInstallResult(uint result)
+    internal static uint CheckInstallResult(uint result)
     {
         if (result is 0 or ERROR_SUCCESS_REBOOT_REQUIRED or ERROR_SUCCESS_REBOOT_INITIATED)
         {
-            return;
+            return result;
         }
         throw new MsiException((int)result);
     }
