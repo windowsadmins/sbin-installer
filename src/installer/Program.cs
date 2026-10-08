@@ -26,6 +26,7 @@ class Program
         // the interactive surface and is unchanged by it.
         var fileLog = FileLog.ForTool("sbin-installer");
         MsiInstaller.PruneVerboseLogs(fileLog, TimeSpan.FromDays(30));
+        MsiInstaller.PruneLegacyTempLogs(fileLog, TimeSpan.FromDays(30));
 
         // Set up dependency injection with minimal logging initially
         var services = new ServiceCollection();

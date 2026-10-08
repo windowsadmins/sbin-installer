@@ -149,8 +149,10 @@ if ($Clean) {
 # Run tests if requested
 if ($Test) {
     Write-Host "Running tests..." -ForegroundColor Yellow
-    # Add test command here when tests are added
-    Write-Host "No tests configured yet" -ForegroundColor Gray
+    dotnet test tests/installer.Tests/installer.Tests.csproj --configuration $Configuration --no-restore
+    if ($LASTEXITCODE -ne 0) {
+        throw "Tests failed with exit code $LASTEXITCODE"
+    }
 }
 
 # Determine runtime identifiers to build

@@ -4,6 +4,8 @@ VisualStudioVersion = 17.0.31903.59
 MinimumVisualStudioVersion = 10.0.40219.1
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "installer", "src\installer\installer.csproj", "{8B8F4B5E-7D4A-4B1E-A7F3-1B9C8E9D4F2A}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "installer.Tests", "tests\installer.Tests\installer.Tests.csproj", "{1577DA3D-09D7-4C3E-B503-FBC1AFC254C0}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -14,5 +16,9 @@ Global
 		{8B8F4B5E-7D4A-4B1E-A7F3-1B9C8E9D4F2A}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{8B8F4B5E-7D4A-4B1E-A7F3-1B9C8E9D4F2A}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{8B8F4B5E-7D4A-4B1E-A7F3-1B9C8E9D4F2A}.Release|Any CPU.Build.0 = Release|Any CPU
+		{1577DA3D-09D7-4C3E-B503-FBC1AFC254C0}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{1577DA3D-09D7-4C3E-B503-FBC1AFC254C0}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{1577DA3D-09D7-4C3E-B503-FBC1AFC254C0}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{1577DA3D-09D7-4C3E-B503-FBC1AFC254C0}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 EndGlobal
